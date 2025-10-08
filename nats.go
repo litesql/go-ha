@@ -63,8 +63,10 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*nats.Conn, *server.Server, 
 	if cfg.EnableLogs {
 		ns.ConfigureLogger()
 	}
-	slog.Debug("starting NATS server", "port", opts.Port, "store_dir", opts.StoreDir)
+
 	go ns.Start()
+
+	slog.Info("starting HA embedded NATS server", "port", opts.Port, "store_dir", ns.StoreDir())
 
 	if !ns.ReadyForConnections(5 * time.Second) {
 		return nil, nil, err

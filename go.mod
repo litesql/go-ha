@@ -7,7 +7,6 @@ replace github.com/mattn/go-sqlite3 => github.com/litesql/go-sqlite3 v1.14.33
 require (
 	github.com/antlr4-go/antlr/v4 v4.13.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/litesql/ha v0.0.13
 	github.com/mattn/go-sqlite3 v1.14.32
 )
 

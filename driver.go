@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
+	"github.com/litesql/go-sqlite3"
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 )
 
 const DefaultStream = "ha_replication"
@@ -20,8 +22,9 @@ const DefaultStream = "ha_replication"
 func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	c := Connector{
 		replicationSubject: DefaultStream,
-		replicationURL:     "nats://localhost:4222",
 		publisherTimeout:   15 * time.Second,
+		streamMaxAge:       24 * time.Hour,
+		replicas:           1,
 	}
 	for _, opt := range options {
 		opt(&c)
@@ -33,6 +36,27 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 		}
 		c.name = hostname
 	}
+	var err error
+	if c.embeddedNatsConfig != nil {
+		c.nc, c.ns, err = runEmbeddedNATSServer(*c.embeddedNatsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start embedded NATS server: %w", err)
+		}
+	}
+
+	if c.nc == nil && c.replicationURL != "" {
+		c.nc, err = nats.Connect(c.replicationURL, c.natsOptions...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to conect to NATS server at %q: %w", c.replicationURL, err)
+		}
+	}
+
+	if c.nc != nil && c.publisher == nil {
+		c.publisher, err = newNatsPublisher(c.nc, c.replicas, c.replicationSubject, c.streamMaxAge, c.publisherTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
+		}
+	}
 
 	c.driver = &sqlite3.SQLiteDriver{
 		Extensions: c.extensions,
@@ -40,6 +64,14 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 			enableCDCHooks(conn, c.name, c.publisher)
 			return nil
 		},
+	}
+
+	if c.nc != nil {
+		db := sql.OpenDB(&c)
+		_, err := newNatsSubscriber(c.name, c.nc, c.replicationSubject, c.deliverPolicy, db)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
+		}
 	}
 	return &c, nil
 }
@@ -49,11 +81,27 @@ type Connector struct {
 	dsn                string
 	name               string
 	extensions         []string
+	embeddedNatsConfig *EmbeddedNatsConfig
+	replicas           int
+	streamMaxAge       time.Duration
 	replicationURL     string
-	embeddedNatsConfig string
+	natsOptions        []nats.Option
 	replicationSubject string
+	deliverPolicy      string
 	publisher          CDCPublisher
 	publisherTimeout   time.Duration
+
+	nc *nats.Conn
+	ns *server.Server
+}
+
+func (c *Connector) Close() {
+	if c.nc != nil && !c.nc.IsClosed() {
+		c.nc.Close()
+	}
+	if c.ns != nil {
+		c.ns.WaitForShutdown()
+	}
 }
 
 func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {

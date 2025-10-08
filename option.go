@@ -1,6 +1,10 @@
 package ha
 
-import "time"
+import (
+	"time"
+
+	"github.com/nats-io/nats.go"
+)
 
 type Option func(*Connector)
 
@@ -18,9 +22,17 @@ func WithExtensions(extensions ...string) Option {
 	}
 }
 
-func WithNatsConfigFile(path string) Option {
+func WithEmbeddedNatsConfig(cfg *EmbeddedNatsConfig) Option {
 	return func(c *Connector) {
-		c.embeddedNatsConfig = path
+		c.embeddedNatsConfig = cfg
+	}
+}
+
+func WithNatsOptions(options ...nats.Option) Option {
+	return func(c *Connector) {
+		if len(options) > 0 {
+			c.natsOptions = options
+		}
 	}
 }
 
@@ -36,6 +48,12 @@ func WithReplicationSubject(subject string) Option {
 	}
 }
 
+func WithDeliverPolicy(deliverPolicy string) Option {
+	return func(c *Connector) {
+		c.deliverPolicy = deliverPolicy
+	}
+}
+
 func WithCDCPublisher(pub CDCPublisher) Option {
 	return func(c *Connector) {
 		c.publisher = pub
@@ -46,4 +64,26 @@ func WithPublisherTimeout(timeout time.Duration) Option {
 	return func(c *Connector) {
 		c.publisherTimeout = timeout
 	}
+}
+
+func WithStreamMaxAge(maxAge time.Duration) Option {
+	return func(c *Connector) {
+		c.streamMaxAge = maxAge
+	}
+}
+
+func WithReplicas(replicas int) Option {
+	return func(c *Connector) {
+		c.replicas = replicas
+	}
+}
+
+type EmbeddedNatsConfig struct {
+	Name       string
+	Port       int
+	StoreDir   string
+	User       string
+	Pass       string
+	File       string
+	EnableLogs bool
 }

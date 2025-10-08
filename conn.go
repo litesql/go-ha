@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 
-	"github.com/mattn/go-sqlite3"
+	"github.com/litesql/go-sqlite3"
 )
 
 type Conn struct {

@@ -40,7 +40,7 @@ func (cs *ChangeSet) Send(pub CDCPublisher) error {
 	}
 	defer cs.Clear()
 
-	slog.Info("Sending changeset", "changes", len(cs.Changes))
+	slog.Debug("Sending changeset", "changes", len(cs.Changes))
 	cs.Timestamp = time.Now().UnixNano()
 	return pub.Publish(cs)
 }

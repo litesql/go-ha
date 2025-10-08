@@ -137,7 +137,7 @@ func (s *Statement) Rollback() bool {
 }
 
 func (s *Statement) parse(ctx context.Context) error {
-	slog.InfoContext(ctx, "Parse", "sql", s.source)
+	slog.DebugContext(ctx, "Parse", "sql", s.source)
 	input := antlr.NewInputStream(s.source)
 	lexer := parser.NewSQLiteLexer(input)
 	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)

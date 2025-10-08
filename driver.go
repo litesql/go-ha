@@ -22,6 +22,7 @@ const DefaultStream = "ha_replication"
 
 func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	c := Connector{
+		dsn:                dsn,
 		replicationSubject: DefaultStream,
 		publisherTimeout:   15 * time.Second,
 		replicas:           1,

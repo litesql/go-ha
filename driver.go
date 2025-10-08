@@ -15,6 +15,7 @@ import (
 	"github.com/litesql/go-sqlite3"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 const DefaultStream = "ha_replication"
@@ -23,7 +24,6 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	c := Connector{
 		replicationSubject: DefaultStream,
 		publisherTimeout:   15 * time.Second,
-		streamMaxAge:       24 * time.Hour,
 		replicas:           1,
 	}
 	for _, opt := range options {
@@ -52,7 +52,7 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	}
 
 	if c.nc != nil && c.publisher == nil {
-		c.publisher, err = newNatsPublisher(c.nc, c.replicas, c.replicationSubject, c.streamMaxAge, c.publisherTimeout)
+		c.publisher, err = newPublisher(c.nc, c.replicas, c.replicationSubject, c.streamMaxAge, c.publisherTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
 		}
@@ -68,10 +68,15 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 
 	if c.nc != nil {
 		db := sql.OpenDB(&c)
-		_, err := newNatsSubscriber(c.name, c.nc, c.replicationSubject, c.deliverPolicy, db)
+		c.subscriber, err = newSubscriber(c.name, c.nc, c.replicationSubject, c.deliverPolicy, db)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
 		}
+		c.snapshotter, err = newSnapshotter(context.Background(), c.nc, c.replicas, c.replicationSubject, db, c.snapshotInterval)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start NATS snapshotter: %w", err)
+		}
+		c.snapshotter.SetSeqProvider(c.subscriber)
 	}
 	return &c, nil
 }
@@ -90,9 +95,49 @@ type Connector struct {
 	deliverPolicy      string
 	publisher          CDCPublisher
 	publisherTimeout   time.Duration
+	snapshotInterval   time.Duration
 
-	nc *nats.Conn
-	ns *server.Server
+	nc          *nats.Conn
+	ns          *server.Server
+	subscriber  *subscriber
+	snapshotter *snapshotter
+}
+
+var ErrNatsNotConfigured = errors.New("NATS not configured")
+
+func (c *Connector) DeliveredInfo(ctx context.Context, name string) ([]*jetstream.ConsumerInfo, error) {
+	if c.subscriber == nil {
+		return nil, ErrNatsNotConfigured
+	}
+	return c.subscriber.DeliveredInfo(ctx, name)
+}
+
+func (c *Connector) RemoveConsumer(ctx context.Context, name string) error {
+	if c.subscriber == nil {
+		return ErrNatsNotConfigured
+	}
+	return c.subscriber.RemoveConsumer(ctx, name)
+}
+
+func (c *Connector) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
+	if c.snapshotter == nil {
+		return 0, ErrNatsNotConfigured
+	}
+	return c.snapshotter.TakeSnapshot(ctx, db)
+}
+
+func (c *Connector) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, error) {
+	if c.snapshotter == nil {
+		return 0, nil, ErrNatsNotConfigured
+	}
+	return c.snapshotter.LatestSnapshot(ctx)
+}
+
+func (c *Connector) LatestSeq() uint64 {
+	if c.subscriber == nil {
+		return 0
+	}
+	return c.subscriber.LatestSeq()
 }
 
 func (c *Connector) Close() {

@@ -66,6 +66,12 @@ func WithPublisherTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithSnapshotInterval(interval time.Duration) Option {
+	return func(c *Connector) {
+		c.snapshotInterval = interval
+	}
+}
+
 func WithStreamMaxAge(maxAge time.Duration) Option {
 	return func(c *Connector) {
 		c.streamMaxAge = maxAge

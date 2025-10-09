@@ -27,6 +27,7 @@ func init() {
 type Driver struct {
 	Extensions  []string
 	ConnectHook ConnectHookFn
+	Options     []Option
 }
 
 func (d *Driver) Open(name string) (driver.Conn, error) {
@@ -42,6 +43,7 @@ func (d *Driver) OpenConnector(name string) (driver.Connector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
+	opts = append(opts, d.Options...)
 	if len(d.Extensions) > 0 {
 		opts = append(opts, WithExtensions(d.Extensions...))
 	}

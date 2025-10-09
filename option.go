@@ -1,8 +1,13 @@
 package ha
 
 import (
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/litesql/go-sqlite3"
 	"github.com/nats-io/nats.go"
 )
 
@@ -20,6 +25,21 @@ func WithExtensions(extensions ...string) Option {
 			c.extensions = extensions
 		}
 	}
+}
+
+type EmbeddedNatsConfig struct {
+	Name       string
+	Port       int
+	StoreDir   string
+	User       string
+	Pass       string
+	File       string
+	EnableLogs bool
+}
+
+func (e EmbeddedNatsConfig) empty() bool {
+	return e.Name == "" && e.Port == 0 && e.StoreDir == "" &&
+		e.User == "" && e.Pass == "" && e.File == "" && !e.EnableLogs
 }
 
 func WithEmbeddedNatsConfig(cfg *EmbeddedNatsConfig) Option {
@@ -84,12 +104,96 @@ func WithReplicas(replicas int) Option {
 	}
 }
 
-type EmbeddedNatsConfig struct {
-	Name       string
-	Port       int
-	StoreDir   string
-	User       string
-	Pass       string
-	File       string
-	EnableLogs bool
+type ConnectHookFn func(conn *sqlite3.SQLiteConn) error
+
+func WithConnectHook(fn ConnectHookFn) Option {
+	return func(c *Connector) {
+		c.connectHook = fn
+	}
+}
+
+func nameToOptions(name string) (string, []Option, error) {
+	dsn := name
+	var queryParams string
+	if i := strings.Index(name, "?"); i != -1 {
+		dsn = name[0:i]
+		queryParams = name[i:]
+	}
+	if queryParams == "" {
+		return dsn, nil, nil
+	}
+	values, err := url.ParseQuery(queryParams)
+	if err != nil {
+		return "", nil, err
+	}
+	var opts []Option
+	var dsnOptions []string
+	var natsConfig EmbeddedNatsConfig
+	for k, v := range values {
+		if len(v) == 0 {
+			continue
+		}
+		value := v[0]
+		switch k {
+		case "name":
+			opts = append(opts, WithName(value))
+		case "replicationURL":
+			opts = append(opts, WithReplicationURL(value))
+		case "replicationSubject":
+			opts = append(opts, WithReplicationSubject(value))
+		case "deliverPolicy":
+			opts = append(opts, WithDeliverPolicy(value))
+		case "publisherTimeout":
+			timeout, err := time.ParseDuration(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid publisherTimeout: %w", err)
+			}
+			opts = append(opts, WithPublisherTimeout(timeout))
+		case "replicas":
+			replicas, err := strconv.Atoi(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid replicas: %w", err)
+			}
+			opts = append(opts, WithReplicas(replicas))
+		case "streamMaxAge":
+			maxAge, err := time.ParseDuration(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid streamMaxAge: %w", err)
+			}
+			opts = append(opts, WithStreamMaxAge(maxAge))
+		case "snapshotInterval":
+			interval, err := time.ParseDuration(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid streamMaxAge: %w", err)
+			}
+			opts = append(opts, WithSnapshotInterval(interval))
+		case "natsName":
+			natsConfig.Name = value
+		case "natsPort":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid natsPort: %w", err)
+			}
+			natsConfig.Port = port
+		case "natsConfigFile":
+			natsConfig.File = value
+		case "natsStoreDir":
+			natsConfig.StoreDir = value
+		case "natsUser":
+			natsConfig.User = value
+		case "natsPass":
+			natsConfig.Pass = value
+		default:
+			dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, value))
+		}
+	}
+
+	if !natsConfig.empty() {
+		opts = append(opts, WithEmbeddedNatsConfig(&natsConfig))
+	}
+
+	if len(dsnOptions) > 0 {
+		dsn = fmt.Sprintf("%s?%s", dsn, strings.Join(dsnOptions, "&"))
+	}
+	return dsn, opts, nil
 }

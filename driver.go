@@ -20,12 +20,58 @@ import (
 
 const DefaultStream = "ha_replication"
 
+func init() {
+	sql.Register("ha", &Driver{})
+}
+
+type Driver struct {
+	Extensions  []string
+	ConnectHook ConnectHookFn
+}
+
+func (d *Driver) Open(name string) (driver.Conn, error) {
+	connector, err := d.OpenConnector(name)
+	if err != nil {
+		return nil, err
+	}
+	return connector.Connect(context.Background())
+}
+
+func (d *Driver) OpenConnector(name string) (driver.Connector, error) {
+	dsn, opts, err := nameToOptions(name)
+	if err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if len(d.Extensions) > 0 {
+		opts = append(opts, WithExtensions(d.Extensions...))
+	}
+	if d.ConnectHook != nil {
+		opts = append(opts, WithConnectHook(d.ConnectHook))
+	}
+	return NewConnector(dsn, opts...)
+}
+
 func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	c := Connector{
 		dsn:                dsn,
 		replicationSubject: DefaultStream,
 		publisherTimeout:   15 * time.Second,
 		replicas:           1,
+		natsOptions: []nats.Option{
+			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+				if err != nil {
+					slog.Error("NATS got disconnected!", "reason", err)
+				}
+			}),
+			nats.ReconnectHandler(func(nc *nats.Conn) {
+				slog.Info("NATS got reconnected!", "url", nc.ConnectedUrl())
+			}),
+			nats.ClosedHandler(func(nc *nats.Conn) {
+				if err := nc.LastError(); err != nil {
+					slog.Error("NATS connection closed.", "reason", err)
+				}
+			}),
+		},
 	}
 	for _, opt := range options {
 		opt(&c)
@@ -62,6 +108,11 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	c.driver = &sqlite3.SQLiteDriver{
 		Extensions: c.extensions,
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+			if c.connectHook != nil {
+				if err := c.connectHook(conn); err != nil {
+					return err
+				}
+			}
 			enableCDCHooks(conn, c.name, c.publisher)
 			return nil
 		},
@@ -85,6 +136,7 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 type Connector struct {
 	driver             driver.Driver
 	dsn                string
+	connectHook        ConnectHookFn
 	name               string
 	extensions         []string
 	embeddedNatsConfig *EmbeddedNatsConfig

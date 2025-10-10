@@ -16,19 +16,42 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-type subscriber struct {
-	nc        *nats.Conn
-	js        jetstream.JetStream
-	consumer  jetstream.Consumer
-	node      string
-	durable   string
-	subject   string
-	streamSeq uint64
-	db        *sql.DB
-	basefile  string
+type NoopSubscriber struct{}
+
+func (*NoopSubscriber) Start() error {
+	return nil
 }
 
-func newSubscriber(node string, durable string, nc *nats.Conn, subject string, policy string, filename string, db *sql.DB) (*subscriber, error) {
+func (*NoopSubscriber) LatestSeq() uint64 {
+	return 0
+}
+
+func (*NoopSubscriber) RemoveConsumer(ctx context.Context, name string) error {
+	return nil
+}
+
+func (*NoopSubscriber) DeliveredInfo(ctx context.Context, name string) (any, error) {
+	return "", nil
+}
+
+func NewNoopSubscriber() *NoopSubscriber {
+	return &NoopSubscriber{}
+}
+
+type NATSSubscriber struct {
+	nc          *nats.Conn
+	js          jetstream.JetStream
+	consumer    jetstream.Consumer
+	node        string
+	durable     string
+	subject     string
+	streamSeq   uint64
+	db          *sql.DB
+	basefile    string
+	interceptor ChangeSetInterceptor
+}
+
+func NewNATSSubscriber(node string, durable string, nc *nats.Conn, subject string, policy string, filename string, db *sql.DB, interceptor ChangeSetInterceptor) (*NATSSubscriber, error) {
 	var (
 		deliverPolicy jetstream.DeliverPolicy
 		startSeq      uint64
@@ -77,13 +100,14 @@ func newSubscriber(node string, durable string, nc *nats.Conn, subject string, p
 		return nil, err
 	}
 
-	s := subscriber{
-		nc:      nc,
-		js:      js,
-		node:    node,
-		durable: durable,
-		subject: subject,
-		db:      db,
+	s := NATSSubscriber{
+		nc:          nc,
+		js:          js,
+		node:        node,
+		durable:     durable,
+		subject:     subject,
+		db:          db,
+		interceptor: interceptor,
 	}
 
 	if filename != "" {
@@ -112,7 +136,7 @@ func newSubscriber(node string, durable string, nc *nats.Conn, subject string, p
 	return &s, nil
 }
 
-func (s *subscriber) startConsumer() error {
+func (s *NATSSubscriber) Start() error {
 	_, err := s.consumer.Consume(s.handler)
 	if err != nil {
 		slog.Error("failed to start CDC consumer", "error", err, "durable", s.durable, "subject", s.subject)
@@ -120,11 +144,11 @@ func (s *subscriber) startConsumer() error {
 	return err
 }
 
-func (s *subscriber) LatestSeq() uint64 {
+func (s *NATSSubscriber) LatestSeq() uint64 {
 	return s.streamSeq
 }
 
-func (s *subscriber) RemoveConsumer(ctx context.Context, name string) error {
+func (s *NATSSubscriber) RemoveConsumer(ctx context.Context, name string) error {
 	stream, err := s.js.Stream(ctx, s.subject)
 	if err != nil {
 		return err
@@ -132,7 +156,7 @@ func (s *subscriber) RemoveConsumer(ctx context.Context, name string) error {
 	return stream.DeleteConsumer(ctx, name)
 }
 
-func (s *subscriber) DeliveredInfo(ctx context.Context, name string) ([]*jetstream.ConsumerInfo, error) {
+func (s *NATSSubscriber) DeliveredInfo(ctx context.Context, name string) (any, error) {
 	stream, err := s.js.Stream(ctx, s.subject)
 	if err != nil {
 		return nil, err
@@ -146,7 +170,7 @@ func (s *subscriber) DeliveredInfo(ctx context.Context, name string) ([]*jetstre
 		if err != nil {
 			return nil, err
 		}
-		return []*jetstream.ConsumerInfo{info}, nil
+		return info, nil
 	}
 	listConsumers := stream.ListConsumers(ctx)
 	if listConsumers.Err() != nil {
@@ -159,7 +183,7 @@ func (s *subscriber) DeliveredInfo(ctx context.Context, name string) ([]*jetstre
 	return listInfo, nil
 }
 
-func (s *subscriber) handler(msg jetstream.Msg) {
+func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	meta, err := msg.Metadata()
 	if err != nil {
 		slog.Error("failed to get message metadata", "error", err, "subject", msg.Subject())
@@ -167,6 +191,7 @@ func (s *subscriber) handler(msg jetstream.Msg) {
 	}
 	var cs ChangeSet
 	cs.StreamSeq = meta.Sequence.Stream
+	cs.interceptor = s.interceptor
 	err = json.Unmarshal(msg.Data(), &cs)
 	if err != nil {
 		slog.Error("failed to unmarshal CDC message", "error", err, "stream_seq", cs.StreamSeq)
@@ -192,7 +217,7 @@ func (s *subscriber) handler(msg jetstream.Msg) {
 	s.ack(msg, meta)
 }
 
-func (s *subscriber) ack(msg jetstream.Msg, meta *jetstream.MsgMetadata) {
+func (s *NATSSubscriber) ack(msg jetstream.Msg, meta *jetstream.MsgMetadata) {
 	err := msg.Ack()
 	if err != nil {
 		slog.Error("failed to ack message", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)

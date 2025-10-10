@@ -11,21 +11,27 @@ import (
 )
 
 type ChangeSet struct {
-	publisher CDCPublisher
-	Node      string   `json:"node"`
-	ProcessID int64    `json:"process_id"`
-	Filename  string   `json:"filename"`
-	Changes   []Change `json:"changes"`
-	Timestamp int64    `json:"timestamp_ns"`
-	StreamSeq uint64   `json:"-"`
+	interceptor ChangeSetInterceptor
+	publisher   CDCPublisher
+	Node        string   `json:"node"`
+	ProcessID   int64    `json:"process_id"`
+	Filename    string   `json:"filename"`
+	Changes     []Change `json:"changes"`
+	Timestamp   int64    `json:"timestamp_ns"`
+	StreamSeq   uint64   `json:"-"`
 }
 
-func NewChangeSet(node string, filename string, publisher CDCPublisher) *ChangeSet {
+func NewChangeSet(node string, filename string, interceptor ChangeSetInterceptor, publisher CDCPublisher) *ChangeSet {
 	return &ChangeSet{
-		Node:      node,
-		Filename:  filename,
-		publisher: publisher,
+		Node:        node,
+		Filename:    filename,
+		interceptor: interceptor,
+		publisher:   publisher,
 	}
+}
+
+func (cs *ChangeSet) SetInterceptor(interceptor ChangeSetInterceptor) {
+	cs.interceptor = interceptor
 }
 
 func (cs *ChangeSet) AddChange(change Change) {
@@ -47,7 +53,19 @@ func (cs *ChangeSet) Send(pub CDCPublisher) error {
 	return pub.Publish(cs)
 }
 
-func (cs *ChangeSet) Apply(db *sql.DB) error {
+func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
+	if cs.interceptor != nil {
+		defer func() {
+			err = cs.interceptor.AfterApply(cs, db, err)
+		}()
+		skip, err := cs.interceptor.BeforeApply(cs, db)
+		if err != nil {
+			return err
+		}
+		if skip {
+			return nil
+		}
+	}
 	if len(cs.Changes) == 0 {
 		return nil
 	}
@@ -62,7 +80,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) error {
 		return err
 	}
 	disableCDCHooks(sconn)
-	defer enableCDCHooks(sconn, cs.Filename, cs.Node, cs.publisher)
+	defer enableCDCHooks(sconn, cs.Filename, cs.Node, cs.interceptor, cs.publisher)
 
 	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{
 		Isolation: sql.LevelReadCommitted,
@@ -106,7 +124,8 @@ func (cs *ChangeSet) Apply(db *sql.DB) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	err = tx.Commit()
+	return
 }
 
 func placeholders(n int) string {

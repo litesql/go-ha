@@ -3,6 +3,7 @@ package ha
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"time"
 
@@ -12,14 +13,66 @@ import (
 
 var processID = time.Now().UnixNano()
 
-type publisher struct {
+type NoopPublisher struct{}
+
+func (p *NoopPublisher) Publish(cs *ChangeSet) error {
+	return nil
+}
+
+func NewNoopPublisher() *NoopPublisher {
+	return &NoopPublisher{}
+}
+
+type ChangeSetSerializer func(*ChangeSet) ([]byte, error)
+
+type WriterPublisher struct {
+	writer     io.Writer
+	serializer ChangeSetSerializer
+}
+
+func NewWriterPublisher(w io.Writer, serializer ChangeSetSerializer) *WriterPublisher {
+	return &WriterPublisher{
+		writer:     w,
+		serializer: serializer,
+	}
+}
+
+func (p *WriterPublisher) Publish(cs *ChangeSet) error {
+	b, err := p.serializer(cs)
+	if err != nil {
+		return err
+	}
+	_, err = p.writer.Write(b)
+	return err
+}
+
+func NewJSONPublisher(w io.Writer) *JSONPublisher {
+	return &JSONPublisher{
+		writer: w,
+	}
+}
+
+type JSONPublisher struct {
+	writer io.Writer
+}
+
+func (p *JSONPublisher) Publish(cs *ChangeSet) error {
+	b, err := json.Marshal(cs)
+	if err != nil {
+		return err
+	}
+	_, err = p.writer.Write(b)
+	return err
+}
+
+type NATSPublisher struct {
 	nc      *nats.Conn
 	js      jetstream.JetStream
 	timeout time.Duration
 	subject string
 }
 
-func newPublisher(nc *nats.Conn, replicas int, subject string, maxAge time.Duration, timeout time.Duration) (*publisher, error) {
+func NewNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig) (*NATSPublisher, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		nc.Close()
@@ -27,21 +80,15 @@ func newPublisher(nc *nats.Conn, replicas int, subject string, maxAge time.Durat
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	// Create a stream to hold the CDC messages
-	streamConfig := jetstream.StreamConfig{
-		Name:      subject,
-		Replicas:  replicas,
-		Subjects:  []string{subject},
-		Storage:   jetstream.FileStorage,
-		MaxAge:    maxAge,
-		Discard:   jetstream.DiscardOld,
-		Retention: jetstream.LimitsPolicy,
+
+	if streamConfig != nil {
+		// Create a stream to hold the CDC messages
+		_, err = js.CreateOrUpdateStream(ctx, *streamConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
-	_, err = js.CreateOrUpdateStream(ctx, streamConfig)
-	if err != nil {
-		return nil, err
-	}
-	return &publisher{
+	return &NATSPublisher{
 		nc:      nc,
 		js:      js,
 		timeout: timeout,
@@ -49,7 +96,7 @@ func newPublisher(nc *nats.Conn, replicas int, subject string, maxAge time.Durat
 	}, nil
 }
 
-func (p *publisher) Publish(cs *ChangeSet) error {
+func (p *NATSPublisher) Publish(cs *ChangeSet) error {
 	cs.ProcessID = processID
 	data, err := json.Marshal(cs)
 	if err != nil {

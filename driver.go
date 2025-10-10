@@ -120,7 +120,6 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 			c.nc = ncs.client
 			c.ns = ncs.server
 		}
-
 	}
 
 	if c.nc == nil && c.replicationURL != "" {
@@ -131,7 +130,16 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	}
 
 	if c.nc != nil && c.publisher == nil {
-		c.publisher, err = newPublisher(c.nc, c.replicas, c.replicationSubject, c.streamMaxAge, c.publisherTimeout)
+		streamConfig := jetstream.StreamConfig{
+			Name:      c.replicationSubject,
+			Replicas:  c.replicas,
+			Subjects:  []string{c.replicationSubject},
+			Storage:   jetstream.FileStorage,
+			MaxAge:    c.streamMaxAge,
+			Discard:   jetstream.DiscardOld,
+			Retention: jetstream.LimitsPolicy,
+		}
+		c.publisher, err = NewNATSPublisher(c.nc, c.replicationSubject, c.publisherTimeout, &streamConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
 		}
@@ -157,36 +165,41 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 					return err
 				}
 			}
-			enableCDCHooks(conn, filename, c.name, c.publisher)
+			enableCDCHooks(conn, filename, c.name, c.interceptor, c.publisher)
 			return nil
 		},
 	}
 
 	if c.nc != nil {
 		db := sql.OpenDB(&c)
-		durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", dsn, c.name))
+		if c.subscriber == nil {
+			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", filename, c.name))
 
-		c.subscriber, err = newSubscriber(c.name, durable, c.nc, c.replicationSubject, c.deliverPolicy, filename, db)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
-		}
-		if c.waitFor == nil {
-			err = c.subscriber.startConsumer()
+			c.subscriber, err = NewNATSSubscriber(c.name, durable, c.nc, c.replicationSubject, c.deliverPolicy, filename, db, c.interceptor)
 			if err != nil {
-				return nil, fmt.Errorf("failed to start NATS subscriber consumer: %w", err)
+				return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
 			}
-		} else {
-			go func() {
-				<-c.waitFor
-				c.subscriber.startConsumer()
-			}()
+			if c.waitFor == nil {
+				err = c.subscriber.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start NATS subscriber consumer: %w", err)
+				}
+			} else {
+				go func() {
+					<-c.waitFor
+					c.subscriber.Start()
+				}()
+			}
 		}
-		c.snapshotter, err = newSnapshotter(context.Background(), c.nc, c.replicas, c.replicationSubject, db, c.snapshotInterval)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start NATS snapshotter: %w", err)
+		if c.snapshotter == nil {
+			c.snapshotter, err = NewNATSSnapshotter(context.Background(), c.nc, c.replicas, c.replicationSubject, db, c.snapshotInterval, c.subscriber)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start NATS snapshotter: %w", err)
+			}
 		}
-		c.snapshotter.SetSeqProvider(c.subscriber)
+
 	}
+
 	connectors[dsn] = &c
 	return &c, nil
 }
@@ -204,7 +217,6 @@ type Connector struct {
 	natsOptions        []nats.Option
 	replicationSubject string
 	deliverPolicy      string
-	publisher          CDCPublisher
 	publisherTimeout   time.Duration
 	snapshotInterval   time.Duration
 	disableDDLSync     bool
@@ -212,13 +224,15 @@ type Connector struct {
 
 	nc          *nats.Conn
 	ns          *server.Server
-	subscriber  *subscriber
-	snapshotter *snapshotter
+	publisher   CDCPublisher
+	subscriber  CDCSubscriber
+	interceptor ChangeSetInterceptor
+	snapshotter DBSnapshotter
 }
 
 var ErrNatsNotConfigured = errors.New("NATS not configured")
 
-func (c *Connector) DeliveredInfo(ctx context.Context, name string) ([]*jetstream.ConsumerInfo, error) {
+func (c *Connector) DeliveredInfo(ctx context.Context, name string) (any, error) {
 	if c.subscriber == nil {
 		return nil, ErrNatsNotConfigured
 	}
@@ -260,16 +274,18 @@ func (c *Connector) Close() {
 	delete(connectors, c.dsn)
 
 	if c.embeddedNatsConfig != nil {
-		ncs := natsClientServers[c.embeddedNatsConfig]
-		ncs.count--
-		natsClientServers[c.embeddedNatsConfig] = ncs
-		if ncs.count < 0 {
-			if !ncs.client.IsClosed() {
-				ncs.client.Close()
+		ncs, ok := natsClientServers[c.embeddedNatsConfig]
+		if ok {
+			ncs.count--
+			natsClientServers[c.embeddedNatsConfig] = ncs
+			if ncs.count < 0 {
+				if !ncs.client.IsClosed() {
+					ncs.client.Close()
+				}
+				ncs.server.WaitForShutdown()
 			}
-			ncs.server.WaitForShutdown()
+			delete(natsClientServers, c.embeddedNatsConfig)
 		}
-		delete(natsClientServers, c.embeddedNatsConfig)
 		return
 	}
 	if c.nc != nil && !c.nc.IsClosed() {
@@ -363,6 +379,23 @@ type CDCPublisher interface {
 	Publish(cs *ChangeSet) error
 }
 
+type CDCSubscriber interface {
+	Start() error
+	LatestSeq() uint64
+	RemoveConsumer(ctx context.Context, name string) error
+	DeliveredInfo(ctx context.Context, name string) (any, error)
+}
+
+type ChangeSetInterceptor interface {
+	BeforeApply(*ChangeSet, *sql.DB) (skip bool, err error)
+	AfterApply(*ChangeSet, *sql.DB, error) error
+}
+
+type DBSnapshotter interface {
+	TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error)
+	LatestSnapshot(ctx context.Context) (sequence uint64, reader io.ReadCloser, err error)
+}
+
 var (
 	changeSetSessions   = make(map[*sqlite3.SQLiteConn]*ChangeSet)
 	changeSetSessionsMu sync.Mutex
@@ -392,59 +425,43 @@ func removeLastChange(conn *sqlite3.SQLiteConn) error {
 	return nil
 }
 
-type tableInfo struct {
-	columns []string
-	types   []string
-}
-
-func enableCDCHooks(conn *sqlite3.SQLiteConn, filename string, nodeName string, publisher CDCPublisher) {
+func enableCDCHooks(conn *sqlite3.SQLiteConn, filename string, nodeName string, interceptor ChangeSetInterceptor, publisher CDCPublisher) {
 	changeSetSessionsMu.Lock()
 	defer changeSetSessionsMu.Unlock()
 
-	cs := NewChangeSet(nodeName, filename, publisher)
+	cs := NewChangeSet(nodeName, filename, interceptor, publisher)
 	changeSetSessions[conn] = cs
-	tableColumns := make(map[string]tableInfo)
 	conn.RegisterPreUpdateHook(func(d sqlite3.SQLitePreUpdateData) {
 		change, ok := getChange(&d)
 		if !ok {
 			return
 		}
-		fullTableName := fmt.Sprintf("%s.%s", change.Database, change.Table)
-		var types []string
-		if ti, ok := tableColumns[fullTableName]; ok {
-			change.Columns = ti.columns
-			types = ti.types
-		} else {
-			rows, err := conn.Query(fmt.Sprintf("SELECT name, type FROM %s.PRAGMA_TABLE_INFO('%s')", change.Database, change.Table), nil)
-			if err != nil {
-				slog.Error("failed to read columns", "error", err, "database", change.Database, "table", change.Table)
-				return
-			}
-			defer rows.Close()
-			var columns []string
-			for {
-				dataRow := []driver.Value{new(string), new(string)}
+		rows, err := conn.Query(fmt.Sprintf("SELECT name, type FROM %s.PRAGMA_TABLE_INFO('%s')", change.Database, change.Table), nil)
+		if err != nil {
+			slog.Error("failed to read columns", "error", err, "database", change.Database, "table", change.Table)
+			return
+		}
+		defer rows.Close()
+		var columns, types []string
+		for {
+			dataRow := []driver.Value{new(string), new(string)}
 
-				err := rows.Next(dataRow)
-				if err != nil {
-					if !errors.Is(err, io.EOF) {
-						slog.Error("failed to read table columns", "error", err, "table", change.Table)
-					}
-					break
+			err := rows.Next(dataRow)
+			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					slog.Error("failed to read table columns", "error", err, "table", change.Table)
 				}
-				if v, ok := dataRow[0].(string); ok {
-					columns = append(columns, v)
-				}
-				if v, ok := dataRow[1].(string); ok {
-					types = append(types, v)
-				}
+				break
 			}
-			change.Columns = columns
-			tableColumns[fullTableName] = tableInfo{
-				columns: columns,
-				types:   types,
+			if v, ok := dataRow[0].(string); ok {
+				columns = append(columns, v)
+			}
+			if v, ok := dataRow[1].(string); ok {
+				types = append(types, v)
 			}
 		}
+		change.Columns = columns
+
 		for i, t := range types {
 			if t != "BLOB" {
 				if i < len(change.OldValues) && change.OldValues[i] != nil {

@@ -1,6 +1,7 @@
 package ha
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -23,13 +24,30 @@ type SequenceProvider interface {
 	LatestSeq() uint64
 }
 
-type snapshotter struct {
+type NoopSnapshotter struct {
+	seq uint64
+}
+
+func (s *NoopSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
+	s.seq++
+	return s.seq, nil
+}
+
+func (s *NoopSnapshotter) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, error) {
+	return s.seq, io.NopCloser(bytes.NewReader([]byte{})), nil
+}
+
+func NewNoopSnapshotter() *NoopSnapshotter {
+	return &NoopSnapshotter{}
+}
+
+type NATSSnapshotter struct {
 	objectStore jetstream.ObjectStore
 	seqProvider SequenceProvider
 	mu          sync.Mutex
 }
 
-func newSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream string, db *sql.DB, interval time.Duration) (*snapshotter, error) {
+func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream string, db *sql.DB, interval time.Duration, sequenceProvider SequenceProvider) (*NATSSnapshotter, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, err
@@ -50,8 +68,9 @@ func newSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream str
 			return nil, err
 		}
 	}
-	s := &snapshotter{
+	s := &NATSSnapshotter{
 		objectStore: objectStore,
+		seqProvider: sequenceProvider,
 	}
 	latestSnapshotSeq, _ = s.LatestSnapshotSequence(ctx)
 	if interval > 0 {
@@ -60,11 +79,7 @@ func newSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream str
 	return s, nil
 }
 
-func (s *snapshotter) SetSeqProvider(p SequenceProvider) {
-	s.seqProvider = p
-}
-
-func (s *snapshotter) start(ctx context.Context, db *sql.DB, interval time.Duration) {
+func (s *NATSSnapshotter) start(ctx context.Context, db *sql.DB, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	for {
 		select {
@@ -82,7 +97,7 @@ func (s *snapshotter) start(ctx context.Context, db *sql.DB, interval time.Durat
 	}
 }
 
-func (s *snapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
+func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sequence = s.seqProvider.LatestSeq()
@@ -162,7 +177,7 @@ func (s *snapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence ui
 	return
 }
 
-func (s *snapshotter) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, error) {
+func (s *NATSSnapshotter) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -183,7 +198,7 @@ func (s *snapshotter) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser
 	return sequence, reader, err
 }
 
-func (s *snapshotter) LatestSnapshotSequence(ctx context.Context) (uint64, error) {
+func (s *NATSSnapshotter) LatestSnapshotSequence(ctx context.Context) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

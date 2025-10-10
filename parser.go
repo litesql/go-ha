@@ -156,7 +156,7 @@ func (s *Statement) Rollback() bool {
 }
 
 func (s *Statement) sourceWithIfExists() string {
-	if s.hasIfExists || !s.ddl {
+	if s.hasIfExists || !s.ddl || s.typ == TypeAlterTable {
 		return s.source
 	}
 	var ifExistsExpression string

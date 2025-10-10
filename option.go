@@ -80,6 +80,24 @@ func WithCDCPublisher(pub CDCPublisher) Option {
 	}
 }
 
+func WithCDCSubscriber(sub CDCSubscriber) Option {
+	return func(c *Connector) {
+		c.subscriber = sub
+	}
+}
+
+func WithChangeSetInterceptor(interceptor ChangeSetInterceptor) Option {
+	return func(c *Connector) {
+		c.interceptor = interceptor
+	}
+}
+
+func WithDBSnapshotter(snap DBSnapshotter) Option {
+	return func(c *Connector) {
+		c.snapshotter = snap
+	}
+}
+
 func WithPublisherTimeout(timeout time.Duration) Option {
 	return func(c *Connector) {
 		c.publisherTimeout = timeout
@@ -176,7 +194,7 @@ func nameToOptions(name string) (string, []Option, error) {
 		case "snapshotInterval":
 			interval, err := time.ParseDuration(value)
 			if err != nil {
-				return "", nil, fmt.Errorf("invalid streamMaxAge: %w", err)
+				return "", nil, fmt.Errorf("invalid snapshotInterval: %w", err)
 			}
 			opts = append(opts, WithSnapshotInterval(interval))
 		case "natsName":
@@ -202,6 +220,30 @@ func nameToOptions(name string) (string, []Option, error) {
 			}
 			if disable {
 				opts = append(opts, WithDisableDDLSync())
+			}
+		case "disableCDCPublisher":
+			disable, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid disableCDCPublisher: %w", err)
+			}
+			if disable {
+				opts = append(opts, WithCDCPublisher(NewNoopPublisher()))
+			}
+		case "disableCDCSubscriber":
+			disable, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid disableCDCSubscriber: %w", err)
+			}
+			if disable {
+				opts = append(opts, WithCDCSubscriber(NewNoopSubscriber()))
+			}
+		case "disableDBSnapshotter":
+			disable, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid disableDBSnapshotter: %w", err)
+			}
+			if disable {
+				opts = append(opts, WithDBSnapshotter(NewNoopSnapshotter()))
 			}
 		default:
 			dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, value))

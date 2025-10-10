@@ -15,7 +15,8 @@ func getChange(d *sqlite3.SQLitePreUpdateData) (c Change, ok bool) {
 		NewRowID: d.NewRowID,
 	}
 	count := d.Count()
-	if d.Op == sqlite3.SQLITE_UPDATE {
+	switch d.Op {
+	case sqlite3.SQLITE_UPDATE:
 		c.Operation = "UPDATE"
 		c.OldValues = make([]any, count)
 		c.NewValues = make([]any, count)
@@ -25,21 +26,21 @@ func getChange(d *sqlite3.SQLitePreUpdateData) (c Change, ok bool) {
 		}
 		d.Old(c.OldValues...)
 		d.New(c.NewValues...)
-	} else if d.Op == sqlite3.SQLITE_INSERT {
+	case sqlite3.SQLITE_INSERT:
 		c.Operation = "INSERT"
 		c.NewValues = make([]any, count)
 		for i := range count {
 			c.NewValues[i] = &c.NewValues[i]
 		}
 		d.New(c.NewValues...)
-	} else if d.Op == sqlite3.SQLITE_DELETE {
+	case sqlite3.SQLITE_DELETE:
 		c.Operation = "DELETE"
 		c.OldValues = make([]any, count)
 		for i := range count {
 			c.OldValues[i] = &c.OldValues[i]
 		}
 		d.Old(c.OldValues...)
-	} else {
+	default:
 		c.Operation = fmt.Sprintf("UNKNOWN - %d", d.Op)
 	}
 

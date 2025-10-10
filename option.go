@@ -112,6 +112,18 @@ func WithConnectHook(fn ConnectHookFn) Option {
 	}
 }
 
+func WithDisableDDLSync() Option {
+	return func(c *Connector) {
+		c.disableDDLSync = true
+	}
+}
+
+func WithWaitFor(ch chan struct{}) Option {
+	return func(c *Connector) {
+		c.waitFor = ch
+	}
+}
+
 func nameToOptions(name string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
@@ -183,6 +195,14 @@ func nameToOptions(name string) (string, []Option, error) {
 			natsConfig.User = value
 		case "natsPass":
 			natsConfig.Pass = value
+		case "disableDDLSync":
+			disable, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid disableDDLSync: %w", err)
+			}
+			if disable {
+				opts = append(opts, WithDisableDDLSync())
+			}
 		default:
 			dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, value))
 		}

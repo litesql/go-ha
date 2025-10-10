@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +22,12 @@ import (
 )
 
 const DefaultStream = "ha_replication"
+
+var (
+	connectors        = make(map[string]*Connector)
+	natsClientServers = make(map[*EmbeddedNatsConfig]*natsClientServer)
+	muConnectors      sync.Mutex
+)
 
 func init() {
 	sql.Register("ha", &Driver{})
@@ -54,6 +63,12 @@ func (d *Driver) OpenConnector(name string) (driver.Connector, error) {
 }
 
 func NewConnector(dsn string, options ...Option) (*Connector, error) {
+	muConnectors.Lock()
+	defer muConnectors.Unlock()
+	if c, ok := connectors[dsn]; ok {
+		return c, nil
+	}
+
 	c := Connector{
 		dsn:                dsn,
 		replicationSubject: DefaultStream,
@@ -87,10 +102,21 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	}
 	var err error
 	if c.embeddedNatsConfig != nil {
-		c.nc, c.ns, err = runEmbeddedNATSServer(*c.embeddedNatsConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start embedded NATS server: %w", err)
+		var (
+			ncs *natsClientServer
+			ok  bool
+		)
+		if ncs, ok = natsClientServers[c.embeddedNatsConfig]; !ok {
+			ncs, err = runEmbeddedNATSServer(*c.embeddedNatsConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start embedded NATS server: %w", err)
+			}
+		} else {
+			ncs.count++
 		}
+		natsClientServers[c.embeddedNatsConfig] = ncs
+		c.nc = ncs.client
+		c.ns = ncs.server
 	}
 
 	if c.nc == nil && c.replicationURL != "" {
@@ -107,6 +133,18 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 		}
 	}
 
+	var filename string
+	u, err := url.Parse(dsn)
+	if err == nil {
+		filename = u.Path
+	}
+	if filename == "" {
+		filename = strings.TrimPrefix(dsn, "file:")
+		if i := strings.Index(filename, "?"); i > 0 {
+			filename = filename[0:i]
+		}
+	}
+
 	c.driver = &sqlite3.SQLiteDriver{
 		Extensions: c.extensions,
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
@@ -115,16 +153,29 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 					return err
 				}
 			}
-			enableCDCHooks(conn, c.name, c.publisher)
+			enableCDCHooks(conn, filename, c.name, c.publisher)
 			return nil
 		},
 	}
 
 	if c.nc != nil {
 		db := sql.OpenDB(&c)
-		c.subscriber, err = newSubscriber(c.name, c.nc, c.replicationSubject, c.deliverPolicy, db)
+		durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", dsn, c.name))
+
+		c.subscriber, err = newSubscriber(c.name, durable, c.nc, c.replicationSubject, c.deliverPolicy, filename, db)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
+		}
+		if c.waitFor == nil {
+			err = c.subscriber.startConsumer()
+			if err != nil {
+				return nil, fmt.Errorf("failed to start NATS subscriber consumer: %w", err)
+			}
+		} else {
+			go func() {
+				<-c.waitFor
+				c.subscriber.startConsumer()
+			}()
 		}
 		c.snapshotter, err = newSnapshotter(context.Background(), c.nc, c.replicas, c.replicationSubject, db, c.snapshotInterval)
 		if err != nil {
@@ -132,6 +183,7 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 		}
 		c.snapshotter.SetSeqProvider(c.subscriber)
 	}
+	connectors[dsn] = &c
 	return &c, nil
 }
 
@@ -151,6 +203,8 @@ type Connector struct {
 	publisher          CDCPublisher
 	publisherTimeout   time.Duration
 	snapshotInterval   time.Duration
+	disableDDLSync     bool
+	waitFor            chan struct{}
 
 	nc          *nats.Conn
 	ns          *server.Server
@@ -196,11 +250,26 @@ func (c *Connector) LatestSeq() uint64 {
 }
 
 func (c *Connector) Close() {
+	muConnectors.Lock()
+	defer muConnectors.Unlock()
+
+	delete(connectors, c.dsn)
+
+	if c.embeddedNatsConfig != nil {
+		ncs := natsClientServers[c.embeddedNatsConfig]
+		ncs.count--
+		natsClientServers[c.embeddedNatsConfig] = ncs
+		if ncs.count < 0 {
+			if !ncs.client.IsClosed() {
+				ncs.client.Close()
+			}
+			ncs.server.WaitForShutdown()
+		}
+		delete(natsClientServers, c.embeddedNatsConfig)
+		return
+	}
 	if c.nc != nil && !c.nc.IsClosed() {
 		c.nc.Close()
-	}
-	if c.ns != nil {
-		c.ns.WaitForShutdown()
 	}
 }
 
@@ -211,12 +280,79 @@ func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 	}
 	sqliteConn, _ := conn.(*sqlite3.SQLiteConn)
 	return &Conn{
-		SQLiteConn: sqliteConn,
+		SQLiteConn:     sqliteConn,
+		disableDDLSync: c.disableDDLSync,
 	}, nil
 }
 
 func (c *Connector) Driver() driver.Driver {
 	return c.driver
+}
+
+func LatestSnapshot(ctx context.Context, options ...Option) (sequence uint64, reader io.ReadCloser, err error) {
+	var c Connector
+	for _, opt := range options {
+		opt(&c)
+	}
+	muConnectors.Lock()
+	defer muConnectors.Unlock()
+	var nc *nats.Conn
+	if c.embeddedNatsConfig != nil {
+		if ncs, ok := natsClientServers[c.embeddedNatsConfig]; ok {
+			nc = ncs.client
+		} else {
+			ncs, err = runEmbeddedNATSServer(*c.embeddedNatsConfig)
+			if err != nil {
+				return 0, nil, err
+			}
+			natsClientServers[c.embeddedNatsConfig] = ncs
+			nc = ncs.client
+		}
+	}
+	if nc == nil {
+		if c.replicationURL == "" {
+			return 0, nil, fmt.Errorf("embedded NATS or replicationURL not configured")
+		}
+		nc, err = nats.Connect(c.replicationURL, c.natsOptions...)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer nc.Close()
+	}
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return 0, nil, err
+	}
+	bucketName := c.replicationSubject + "_SNAPSHOTS"
+	objectStore, err := js.CreateObjectStore(ctx, jetstream.ObjectStoreConfig{
+		Bucket:      bucketName,
+		Storage:     jetstream.FileStorage,
+		Compression: true,
+		Replicas:    c.replicas,
+	})
+	if err != nil {
+		if !errors.Is(err, jetstream.ErrBucketExists) {
+			return 0, nil, err
+		}
+		objectStore, err = js.ObjectStore(ctx, bucketName)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+	info, err := objectStore.GetInfo(ctx, latestSnapshotName)
+	if err != nil {
+		return 0, nil, err
+	}
+	sequenceStr := info.Headers.Get("seq")
+	if sequenceStr != "" {
+		sequence, err = strconv.ParseUint(sequenceStr, 10, 64)
+		if err != nil {
+			return 0, nil, fmt.Errorf("convert sequence header: %w", err)
+		}
+	}
+
+	reader, err = objectStore.Get(ctx, latestSnapshotName)
+	return sequence, reader, err
 }
 
 type CDCPublisher interface {
@@ -257,11 +393,11 @@ type tableInfo struct {
 	types   []string
 }
 
-func enableCDCHooks(conn *sqlite3.SQLiteConn, nodeName string, publisher CDCPublisher) {
+func enableCDCHooks(conn *sqlite3.SQLiteConn, filename string, nodeName string, publisher CDCPublisher) {
 	changeSetSessionsMu.Lock()
 	defer changeSetSessionsMu.Unlock()
 
-	cs := NewChangeSet(nodeName, publisher)
+	cs := NewChangeSet(nodeName, filename, publisher)
 	changeSetSessions[conn] = cs
 	tableColumns := make(map[string]tableInfo)
 	conn.RegisterPreUpdateHook(func(d sqlite3.SQLitePreUpdateData) {

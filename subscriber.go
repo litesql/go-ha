@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -20,12 +21,14 @@ type subscriber struct {
 	js        jetstream.JetStream
 	consumer  jetstream.Consumer
 	node      string
+	durable   string
 	subject   string
 	streamSeq uint64
 	db        *sql.DB
+	basefile  string
 }
 
-func newSubscriber(node string, nc *nats.Conn, subject string, policy string, db *sql.DB) (*subscriber, error) {
+func newSubscriber(node string, durable string, nc *nats.Conn, subject string, policy string, filename string, db *sql.DB) (*subscriber, error) {
 	var (
 		deliverPolicy jetstream.DeliverPolicy
 		startSeq      uint64
@@ -78,14 +81,19 @@ func newSubscriber(node string, nc *nats.Conn, subject string, policy string, db
 		nc:      nc,
 		js:      js,
 		node:    node,
+		durable: durable,
 		subject: subject,
 		db:      db,
+	}
+
+	if filename != "" {
+		s.basefile = filepath.Base(filename)
 	}
 
 	consumer, err := s.js.CreateConsumer(context.Background(), s.subject, jetstream.ConsumerConfig{
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: s.subject,
-		Durable:       s.node,
+		Durable:       s.durable,
 		DeliverPolicy: deliverPolicy,
 		OptStartSeq:   startSeq,
 		OptStartTime:  startTime,
@@ -94,19 +102,22 @@ func newSubscriber(node string, nc *nats.Conn, subject string, policy string, db
 		if !errors.Is(err, jetstream.ErrConsumerExists) {
 			return nil, err
 		}
-		consumer, err = s.js.Consumer(context.Background(), subject, s.node)
+		consumer, err = s.js.Consumer(context.Background(), subject, s.durable)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	_, err = consumer.Consume(s.handler)
-	if err != nil {
-		slog.Error("failed to start CDC consumer", "error", err, "node", s.node, "subject", s.subject)
-		return nil, err
-	}
 	s.consumer = consumer
 	return &s, nil
+}
+
+func (s *subscriber) startConsumer() error {
+	_, err := s.consumer.Consume(s.handler)
+	if err != nil {
+		slog.Error("failed to start CDC consumer", "error", err, "durable", s.durable, "subject", s.subject)
+	}
+	return err
 }
 
 func (s *subscriber) LatestSeq() uint64 {
@@ -164,6 +175,11 @@ func (s *subscriber) handler(msg jetstream.Msg) {
 	}
 	if cs.Node == s.node && cs.ProcessID == processID {
 		// Ignore changes originated from this process and node itself
+		s.ack(msg, meta)
+		return
+	}
+	if filepath.Base(cs.Filename) != s.basefile {
+		// Ignore changes originated from other database filename
 		s.ack(msg, meta)
 		return
 	}

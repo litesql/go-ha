@@ -4,15 +4,21 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
-var processID = time.Now().UnixNano()
+type natsClientServer struct {
+	server *server.Server
+	client *nats.Conn
+	count  int
+}
 
-func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*nats.Conn, *server.Server, error) {
+func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 	var (
 		opts *server.Options
 		err  error
@@ -20,7 +26,7 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*nats.Conn, *server.Server, 
 	if cfg.File != "" {
 		opts, err = server.ProcessConfigFile(cfg.File)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to process nats config file: %w", err)
+			return nil, fmt.Errorf("failed to process nats config file: %w", err)
 		}
 	} else {
 		opts = &server.Options{
@@ -53,12 +59,12 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*nats.Conn, *server.Server, 
 	if opts.Cluster.Name != "" && opts.ServerName == "" {
 		opts.ServerName, err = os.Hostname()
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get hostname for nats server name: %w", err)
+			return nil, fmt.Errorf("failed to get hostname for nats server name: %w", err)
 		}
 	}
 	ns, err := server.NewServer(opts)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if cfg.EnableLogs {
 		ns.ConfigureLogger()
@@ -69,7 +75,7 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*nats.Conn, *server.Server, 
 	slog.Info("starting HA embedded NATS server", "port", opts.Port, "store_dir", ns.StoreDir())
 
 	if !ns.ReadyForConnections(5 * time.Second) {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if ns.ClusterName() != "" {
@@ -81,9 +87,12 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*nats.Conn, *server.Server, 
 	nc, err := nats.Connect("", nats.InProcessServer(ns))
 	if err != nil {
 		ns.Shutdown()
-		return nil, nil, err
+		return nil, err
 	}
-	return nc, ns, nil
+	return &natsClientServer{
+		server: ns,
+		client: nc,
+	}, nil
 }
 
 func waitForLeader(ns *server.Server, size int) {
@@ -101,4 +110,15 @@ func waitForLeader(ns *server.Server, size int) {
 		slog.Debug("waiting for the cluster leader", "peers", len(ns.JetStreamClusterPeers()), "size", size)
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+var natsIdentifierNormalizer = regexp.MustCompile(`[.\/\s*>*]`)
+
+func normalizeNatsIdentifier(name string) string {
+	s := natsIdentifierNormalizer.ReplaceAllString(name, "_")
+	s = strings.Trim(s, "_")
+	if len(s) > 32 {
+		return s[len(s)-32:]
+	}
+	return s
 }

@@ -10,6 +10,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+var processID = time.Now().UnixNano()
+
 type publisher struct {
 	nc      *nats.Conn
 	js      jetstream.JetStream

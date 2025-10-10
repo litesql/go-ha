@@ -111,12 +111,16 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to start embedded NATS server: %w", err)
 			}
+			natsClientServers[c.embeddedNatsConfig] = ncs
+			c.nc = ncs.client
+			c.ns = ncs.server
 		} else {
 			ncs.count++
+			natsClientServers[c.embeddedNatsConfig] = ncs
+			c.nc = ncs.client
+			c.ns = ncs.server
 		}
-		natsClientServers[c.embeddedNatsConfig] = ncs
-		c.nc = ncs.client
-		c.ns = ncs.server
+
 	}
 
 	if c.nc == nil && c.replicationURL != "" {

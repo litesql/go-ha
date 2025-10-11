@@ -3,6 +3,7 @@ package ha
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -56,6 +57,20 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 	}
 	opts.JetStream = true
 	opts.DisableJetStreamBanner = true
+
+	for _, ncs := range natsClientServers {
+		addr := ncs.server.Addr()
+		if addr == nil {
+			continue
+		}
+		if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+			if opts.Port == tcpAddr.Port {
+				slog.Warn("reusing existed NATS server", "port", tcpAddr.Port)
+				return ncs, nil
+			}
+		}
+	}
+
 	if opts.Cluster.Name != "" && opts.ServerName == "" {
 		opts.ServerName, err = os.Hostname()
 		if err != nil {

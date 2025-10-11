@@ -112,8 +112,8 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE rowid = ?;", change.Database, change.Table)
 			_, err = tx.Exec(sql, change.OldRowID)
 		case "SQL":
-			sql = change.SQL
-			_, err = tx.Exec(sql, change.SQLArgs...)
+			sql = change.Command
+			_, err = tx.Exec(sql, change.Args...)
 		default:
 			slog.Warn("unknown operation", "operation", change.Operation)
 			continue
@@ -143,11 +143,11 @@ type Change struct {
 	Database  string   `json:"database,omitempty"`
 	Table     string   `json:"table,omitempty"`
 	Columns   []string `json:"columns,omitempty"`
-	Operation string   `json:"operation"` // "INSERT", "UPDATE", "DELETE", "SQL"
+	Operation string   `json:"operation"` // "INSERT", "UPDATE", "DELETE", "SQL", "CUSTOM"
 	OldRowID  int64    `json:"old_rowid,omitempty"`
 	NewRowID  int64    `json:"new_rowid,omitempty"`
 	OldValues []any    `json:"old_values,omitempty"`
 	NewValues []any    `json:"new_values,omitempty"`
-	SQL       string   `json:"sql,omitempty"`
-	SQLArgs   []any    `json:"sql_args,omitempty"`
+	Command   string   `json:"command,omitempty"`
+	Args      []any    `json:"args,omitempty"`
 }

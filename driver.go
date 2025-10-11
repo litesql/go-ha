@@ -408,8 +408,8 @@ func addSQLChange(conn *sqlite3.SQLiteConn, sql string, args []any) error {
 	}
 	cs.AddChange(Change{
 		Operation: "SQL",
-		SQL:       sql,
-		SQLArgs:   args,
+		Command:   sql,
+		Args:      args,
 	})
 	return nil
 }

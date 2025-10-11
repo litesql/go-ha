@@ -75,7 +75,7 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 	slog.Info("starting HA embedded NATS server", "port", opts.Port, "store_dir", ns.StoreDir())
 
 	if !ns.ReadyForConnections(5 * time.Second) {
-		return nil, err
+		return nil, fmt.Errorf("embedded NATS is not ready for connections")
 	}
 
 	if ns.ClusterName() != "" {

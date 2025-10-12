@@ -49,7 +49,7 @@ import (
 )
 
 func main() {
-    c, err := ha.NewConnector("file:_examples/node1/my.db?_journal=WAL&_timeout=5000",
+    c, err := ha.NewConnector("file:example.db?_journal=WAL&_timeout=5000",
 		ha.WithName("node1"),
 		ha.WithEmbeddedNatsConfig(&ha.EmbeddedNatsConfig{
 			Port: 4222,

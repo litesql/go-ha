@@ -7,6 +7,7 @@ Go database/sql driver based on [github.com/mattn/go-sqlite3](https://github.com
 - Built on the robust foundation of `go-sqlite3`.
 - High availability support for SQLite databases.
 - Replication: Synchronize data across nodes using NATS.
+- Customize the replication strategy
 - Leaderless clusters: Read/Write from/to any node. **Last-writer wins** by default, but you can customize conflict resolutions by implementing *ChangeSetInterceptor*.
 - Embedded or External NATS: Choose between an embedded NATS server or an external one for replication.
 - Easy to integrate with existing Go projects.
@@ -70,12 +71,13 @@ func main() {
 
 | Connector option | DSN param | Description | Default |
 |------------------|-----------|-------------|---------|
-| WithName(string) | name   | Unique node name | $HOSTNAME |
-| WithReplicationURL(string)| replicationURL | NATS connection URL. (nats://localhost:4222) | |
-| WithEmbeddedNatsConfig(*ha.EmbeddedNatsConfig) | <ul><li>natsPort</li><li>natsStoreDir</li><li>natsConfigFile</li></ul> | NATS embedded server config |
-| WithDisableDDLSync() | disableDDLSync| Disable replication of DDL commands | | 
-| WithPublisherTimeout(time.Duration) | publisherTimeout | Publisher timeout | 15s |
-| WithExtensions(...string) | | SQLite extensions to load | |
+| WithName | name   | Unique node name | $HOSTNAME |
+| WithReplicationURL| replicationURL | NATS connection URL. (nats://localhost:4222) | |
+| WithEmbeddedNatsConfig | <ul><li>natsPort</li><li>natsStoreDir</li><li>natsConfigFile</li></ul> | NATS embedded server config |
+| WithDisableDDLSync | disableDDLSync| Disable replication of DDL commands | | 
+| WithPublisherTimeout | publisherTimeout | Publisher timeout | 15s |
+| WithChangeSetInterceptor | | Customize the replication behaviour |
+| WithExtensions | | SQLite extensions to load | |
 
 - Check out all options at [option.go](https://github.com/litesql/go-ha/blob/main/option.go) file.
 

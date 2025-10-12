@@ -21,12 +21,11 @@ type ChangeSet struct {
 	StreamSeq   uint64   `json:"-"`
 }
 
-func NewChangeSet(node string, filename string, interceptor ChangeSetInterceptor, publisher CDCPublisher) *ChangeSet {
+func NewChangeSet(node string, filename string, publisher CDCPublisher) *ChangeSet {
 	return &ChangeSet{
-		Node:        node,
-		Filename:    filename,
-		interceptor: interceptor,
-		publisher:   publisher,
+		Node:      node,
+		Filename:  filename,
+		publisher: publisher,
 	}
 }
 
@@ -80,7 +79,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		return err
 	}
 	disableCDCHooks(sconn)
-	defer enableCDCHooks(sconn, cs.Filename, cs.Node, cs.interceptor, cs.publisher)
+	defer enableCDCHooks(sconn, cs.Filename, cs.Node, cs.publisher)
 
 	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{
 		Isolation: sql.LevelReadCommitted,

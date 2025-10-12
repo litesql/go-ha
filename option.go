@@ -62,9 +62,9 @@ func WithReplicationURL(url string) Option {
 	}
 }
 
-func WithReplicationSubject(subject string) Option {
+func WithReplicationStream(stream string) Option {
 	return func(c *Connector) {
-		c.replicationSubject = subject
+		c.replicationStream = stream
 	}
 }
 
@@ -169,8 +169,8 @@ func nameToOptions(name string) (string, []Option, error) {
 			opts = append(opts, WithName(value))
 		case "replicationURL":
 			opts = append(opts, WithReplicationURL(value))
-		case "replicationSubject":
-			opts = append(opts, WithReplicationSubject(value))
+		case "replicationStream":
+			opts = append(opts, WithReplicationStream(value))
 		case "deliverPolicy":
 			opts = append(opts, WithDeliverPolicy(value))
 		case "publisherTimeout":

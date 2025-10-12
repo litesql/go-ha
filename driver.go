@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,10 +71,10 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 	}
 
 	c := Connector{
-		dsn:                dsn,
-		replicationSubject: DefaultStream,
-		publisherTimeout:   15 * time.Second,
-		replicas:           1,
+		dsn:               dsn,
+		replicationStream: DefaultStream,
+		publisherTimeout:  15 * time.Second,
+		replicas:          1,
 		natsOptions: []nats.Option{
 			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 				if err != nil {
@@ -129,31 +130,26 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 		}
 	}
 
+	filename := filenameFromDSN(dsn)
+	subject := c.replicationStream
+	if filename != "" {
+		filename = filepath.Base(filename)
+		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(filename))
+	}
+
 	if c.nc != nil && c.publisher == nil {
 		streamConfig := jetstream.StreamConfig{
-			Name:      c.replicationSubject,
+			Name:      c.replicationStream,
 			Replicas:  c.replicas,
-			Subjects:  []string{c.replicationSubject},
+			Subjects:  []string{c.replicationStream, fmt.Sprintf("%s.>", c.replicationStream)},
 			Storage:   jetstream.FileStorage,
 			MaxAge:    c.streamMaxAge,
 			Discard:   jetstream.DiscardOld,
 			Retention: jetstream.LimitsPolicy,
 		}
-		c.publisher, err = NewNATSPublisher(c.nc, c.replicationSubject, c.publisherTimeout, &streamConfig)
+		c.publisher, err = NewNATSPublisher(c.nc, subject, c.publisherTimeout, &streamConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
-		}
-	}
-
-	var filename string
-	u, err := url.Parse(dsn)
-	if err == nil {
-		filename = u.Path
-	}
-	if filename == "" {
-		filename = strings.TrimPrefix(dsn, "file:")
-		if i := strings.Index(filename, "?"); i > 0 {
-			filename = filename[0:i]
 		}
 	}
 
@@ -165,7 +161,7 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 					return err
 				}
 			}
-			enableCDCHooks(conn, filename, c.name, c.interceptor, c.publisher)
+			enableCDCHooks(conn, filename, c.name, c.publisher)
 			return nil
 		},
 	}
@@ -175,7 +171,7 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", filename, c.name))
 
-			c.subscriber, err = NewNATSSubscriber(c.name, durable, c.nc, c.replicationSubject, c.deliverPolicy, filename, db, c.interceptor)
+			c.subscriber, err = NewNATSSubscriber(c.name, durable, c.nc, c.replicationStream, subject, c.deliverPolicy, db, c.interceptor)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
 			}
@@ -192,12 +188,11 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 			}
 		}
 		if c.snapshotter == nil {
-			c.snapshotter, err = NewNATSSnapshotter(context.Background(), c.nc, c.replicas, c.replicationSubject, db, c.snapshotInterval, c.subscriber)
+			c.snapshotter, err = NewNATSSnapshotter(context.Background(), c.nc, c.replicas, c.replicationStream, db, c.snapshotInterval, c.subscriber, filename)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start NATS snapshotter: %w", err)
 			}
 		}
-
 	}
 
 	connectors[dsn] = &c
@@ -215,7 +210,7 @@ type Connector struct {
 	streamMaxAge       time.Duration
 	replicationURL     string
 	natsOptions        []nats.Option
-	replicationSubject string
+	replicationStream  string
 	deliverPolicy      string
 	publisherTimeout   time.Duration
 	snapshotInterval   time.Duration
@@ -309,7 +304,7 @@ func (c *Connector) Driver() driver.Driver {
 	return c.driver
 }
 
-func LatestSnapshot(ctx context.Context, options ...Option) (sequence uint64, reader io.ReadCloser, err error) {
+func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequence uint64, reader io.ReadCloser, err error) {
 	var c Connector
 	for _, opt := range options {
 		opt(&c)
@@ -343,7 +338,7 @@ func LatestSnapshot(ctx context.Context, options ...Option) (sequence uint64, re
 	if err != nil {
 		return 0, nil, err
 	}
-	bucketName := c.replicationSubject + "_SNAPSHOTS"
+	bucketName := c.replicationStream + "_SNAPSHOTS"
 	objectStore, err := js.CreateObjectStore(ctx, jetstream.ObjectStoreConfig{
 		Bucket:      bucketName,
 		Storage:     jetstream.FileStorage,
@@ -359,7 +354,8 @@ func LatestSnapshot(ctx context.Context, options ...Option) (sequence uint64, re
 			return 0, nil, err
 		}
 	}
-	info, err := objectStore.GetInfo(ctx, latestSnapshotName)
+	objectName := filenameFromDSN(dsn)
+	info, err := objectStore.GetInfo(ctx, objectName)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -371,7 +367,7 @@ func LatestSnapshot(ctx context.Context, options ...Option) (sequence uint64, re
 		}
 	}
 
-	reader, err = objectStore.Get(ctx, latestSnapshotName)
+	reader, err = objectStore.Get(ctx, objectName)
 	return sequence, reader, err
 }
 
@@ -425,11 +421,11 @@ func removeLastChange(conn *sqlite3.SQLiteConn) error {
 	return nil
 }
 
-func enableCDCHooks(conn *sqlite3.SQLiteConn, filename string, nodeName string, interceptor ChangeSetInterceptor, publisher CDCPublisher) {
+func enableCDCHooks(conn *sqlite3.SQLiteConn, filename string, nodeName string, publisher CDCPublisher) {
 	changeSetSessionsMu.Lock()
 	defer changeSetSessionsMu.Unlock()
 
-	cs := NewChangeSet(nodeName, filename, interceptor, publisher)
+	cs := NewChangeSet(nodeName, filename, publisher)
 	changeSetSessions[conn] = cs
 	conn.RegisterPreUpdateHook(func(d sqlite3.SQLitePreUpdateData) {
 		change, ok := getChange(&d)
@@ -518,4 +514,22 @@ func sqliteConn(conn *sql.Conn) (*sqlite3.SQLiteConn, error) {
 		}
 	})
 	return sqlite3Conn, err
+}
+
+func filenameFromDSN(dsn string) string {
+	var filename string
+	u, err := url.Parse(dsn)
+	if err == nil {
+		filename = u.Path
+	}
+	if filename == "" {
+		filename = strings.TrimPrefix(dsn, "file:")
+		if i := strings.Index(filename, "?"); i > 0 {
+			filename = filename[0:i]
+		}
+	}
+	if filename != "" {
+		return filepath.Base(filename)
+	}
+	return ""
 }

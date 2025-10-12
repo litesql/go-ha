@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -44,14 +43,14 @@ type NATSSubscriber struct {
 	consumer    jetstream.Consumer
 	node        string
 	durable     string
+	stream      string
 	subject     string
 	streamSeq   uint64
 	db          *sql.DB
-	basefile    string
 	interceptor ChangeSetInterceptor
 }
 
-func NewNATSSubscriber(node string, durable string, nc *nats.Conn, subject string, policy string, filename string, db *sql.DB, interceptor ChangeSetInterceptor) (*NATSSubscriber, error) {
+func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subject string, policy string, db *sql.DB, interceptor ChangeSetInterceptor) (*NATSSubscriber, error) {
 	var (
 		deliverPolicy jetstream.DeliverPolicy
 		startSeq      uint64
@@ -105,16 +104,13 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, subject strin
 		js:          js,
 		node:        node,
 		durable:     durable,
+		stream:      stream,
 		subject:     subject,
 		db:          db,
 		interceptor: interceptor,
 	}
 
-	if filename != "" {
-		s.basefile = filepath.Base(filename)
-	}
-
-	consumer, err := s.js.CreateConsumer(context.Background(), s.subject, jetstream.ConsumerConfig{
+	consumer, err := s.js.CreateConsumer(context.Background(), s.stream, jetstream.ConsumerConfig{
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: s.subject,
 		Durable:       s.durable,
@@ -126,7 +122,7 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, subject strin
 		if !errors.Is(err, jetstream.ErrConsumerExists) {
 			return nil, err
 		}
-		consumer, err = s.js.Consumer(context.Background(), subject, s.durable)
+		consumer, err = s.js.Consumer(context.Background(), s.stream, s.durable)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +145,7 @@ func (s *NATSSubscriber) LatestSeq() uint64 {
 }
 
 func (s *NATSSubscriber) RemoveConsumer(ctx context.Context, name string) error {
-	stream, err := s.js.Stream(ctx, s.subject)
+	stream, err := s.js.Stream(ctx, s.stream)
 	if err != nil {
 		return err
 	}
@@ -157,7 +153,7 @@ func (s *NATSSubscriber) RemoveConsumer(ctx context.Context, name string) error 
 }
 
 func (s *NATSSubscriber) DeliveredInfo(ctx context.Context, name string) (any, error) {
-	stream, err := s.js.Stream(ctx, s.subject)
+	stream, err := s.js.Stream(ctx, s.stream)
 	if err != nil {
 		return nil, err
 	}
@@ -200,11 +196,6 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	}
 	if cs.Node == s.node && cs.ProcessID == processID {
 		// Ignore changes originated from this process and node itself
-		s.ack(msg, meta)
-		return
-	}
-	if filepath.Base(cs.Filename) != s.basefile {
-		// Ignore changes originated from other database filename
 		s.ack(msg, meta)
 		return
 	}

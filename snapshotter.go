@@ -16,10 +16,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-const latestSnapshotName = "latest"
-
-var latestSnapshotSeq uint64
-
 type SequenceProvider interface {
 	LatestSeq() uint64
 }
@@ -42,12 +38,14 @@ func NewNoopSnapshotter() *NoopSnapshotter {
 }
 
 type NATSSnapshotter struct {
-	objectStore jetstream.ObjectStore
-	seqProvider SequenceProvider
-	mu          sync.Mutex
+	objectStore       jetstream.ObjectStore
+	seqProvider       SequenceProvider
+	objectName        string
+	latestSnapshotSeq uint64
+	mu                sync.Mutex
 }
 
-func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream string, db *sql.DB, interval time.Duration, sequenceProvider SequenceProvider) (*NATSSnapshotter, error) {
+func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream string, db *sql.DB, interval time.Duration, sequenceProvider SequenceProvider, objectName string) (*NATSSnapshotter, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, err
@@ -71,8 +69,9 @@ func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream
 	s := &NATSSnapshotter{
 		objectStore: objectStore,
 		seqProvider: sequenceProvider,
+		objectName:  objectName,
 	}
-	latestSnapshotSeq, _ = s.LatestSnapshotSequence(ctx)
+	s.latestSnapshotSeq, _ = s.LatestSnapshotSequence(ctx)
 	if interval > 0 {
 		go s.start(ctx, db, interval)
 	}
@@ -101,13 +100,13 @@ func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequenc
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sequence = s.seqProvider.LatestSeq()
-	if sequence <= latestSnapshotSeq {
+	if sequence <= s.latestSnapshotSeq {
 		return 0, nil
 	}
 	headers := make(nats.Header)
 	headers.Set("seq", fmt.Sprint(sequence))
-	bkpFile := fmt.Sprintf("bkp_%d", time.Now().Nanosecond())
-	if err := s.objectStore.UpdateMeta(ctx, latestSnapshotName, jetstream.ObjectMeta{
+	bkpFile := fmt.Sprintf("bkp_%s_%d", s.objectName, time.Now().Nanosecond())
+	if err := s.objectStore.UpdateMeta(ctx, s.objectName, jetstream.ObjectMeta{
 		Name: bkpFile,
 	}); err != nil && !errors.Is(err, jetstream.ErrUpdateMetaDeleted) {
 		return 0, err
@@ -117,7 +116,7 @@ func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequenc
 			s.objectStore.Delete(ctx, bkpFile)
 		} else {
 			s.objectStore.UpdateMeta(ctx, bkpFile, jetstream.ObjectMeta{
-				Name: latestSnapshotName,
+				Name: s.objectName,
 			})
 		}
 	}()
@@ -131,13 +130,13 @@ func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequenc
 
 	go func() {
 		info, err := s.objectStore.Put(ctx, jetstream.ObjectMeta{
-			Name:    latestSnapshotName,
+			Name:    s.objectName,
 			Headers: headers,
 		}, reader)
 		if err != nil {
 			errReaderCh <- err
 		} else {
-			latestSnapshotSeq = sequence
+			s.latestSnapshotSeq = sequence
 			slog.Debug("snapshot stored", "bucket", info.Bucket, "name", info.Name, "size", info.Size, "modTime", info.ModTime)
 			errReaderCh <- nil
 		}
@@ -181,7 +180,7 @@ func (s *NATSSnapshotter) LatestSnapshot(ctx context.Context) (uint64, io.ReadCl
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	info, err := s.objectStore.GetInfo(ctx, latestSnapshotName)
+	info, err := s.objectStore.GetInfo(ctx, s.objectName)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -194,7 +193,7 @@ func (s *NATSSnapshotter) LatestSnapshot(ctx context.Context) (uint64, io.ReadCl
 		}
 	}
 
-	reader, err := s.objectStore.Get(ctx, latestSnapshotName)
+	reader, err := s.objectStore.Get(ctx, s.objectName)
 	return sequence, reader, err
 }
 
@@ -202,7 +201,7 @@ func (s *NATSSnapshotter) LatestSnapshotSequence(ctx context.Context) (uint64, e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	info, err := s.objectStore.GetInfo(ctx, latestSnapshotName)
+	info, err := s.objectStore.GetInfo(ctx, s.objectName)
 	if err != nil {
 		return 0, err
 	}

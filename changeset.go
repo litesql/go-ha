@@ -80,10 +80,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	if len(cs.Changes) == 0 {
 		return nil
 	}
-	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{
-		Isolation: sql.LevelReadCommitted,
-		ReadOnly:  false,
-	})
+	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{})
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/litesql/go-sqlite3"
 	"github.com/nats-io/nats.go"
 )
 
@@ -122,14 +121,6 @@ func WithReplicas(replicas int) Option {
 	}
 }
 
-type ConnectHookFn func(conn *sqlite3.SQLiteConn) error
-
-func WithConnectHook(fn ConnectHookFn) Option {
-	return func(c *Connector) {
-		c.connectHook = fn
-	}
-}
-
 func WithDisableDDLSync() Option {
 	return func(c *Connector) {
 		c.disableDDLSync = true
@@ -142,12 +133,12 @@ func WithWaitFor(ch chan struct{}) Option {
 	}
 }
 
-func nameToOptions(name string) (string, []Option, error) {
+func NameToOptions(name string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
 	if i := strings.Index(name, "?"); i != -1 {
 		dsn = name[0:i]
-		queryParams = name[i:]
+		queryParams = name[i+1:]
 	}
 	if queryParams == "" {
 		return dsn, nil, nil

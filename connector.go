@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/litesql/go-sqlite3"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -30,40 +29,15 @@ var (
 	muConnectors      sync.Mutex
 )
 
-func init() {
-	sql.Register("ha", &Driver{})
+type ConnHooksProvider interface {
+	RegisterHooks(driver.Conn) (driver.Conn, error)
+	DisableHooks(*sql.Conn) error
+	EnableHooks(*sql.Conn) error
 }
 
-type Driver struct {
-	Extensions  []string
-	ConnectHook ConnectHookFn
-	Options     []Option
-}
+type ConnHooksFactory func(nodeName string, filename string, disableDDSSync bool, publisher CDCPublisher) ConnHooksProvider
 
-func (d *Driver) Open(name string) (driver.Conn, error) {
-	connector, err := d.OpenConnector(name)
-	if err != nil {
-		return nil, err
-	}
-	return connector.Connect(context.Background())
-}
-
-func (d *Driver) OpenConnector(name string) (driver.Connector, error) {
-	dsn, opts, err := nameToOptions(name)
-	if err != nil {
-		return nil, fmt.Errorf("invalid params: %w", err)
-	}
-	opts = append(opts, d.Options...)
-	if len(d.Extensions) > 0 {
-		opts = append(opts, WithExtensions(d.Extensions...))
-	}
-	if d.ConnectHook != nil {
-		opts = append(opts, WithConnectHook(d.ConnectHook))
-	}
-	return NewConnector(dsn, opts...)
-}
-
-func NewConnector(dsn string, options ...Option) (*Connector, error) {
+func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
 	muConnectors.Lock()
 	defer muConnectors.Unlock()
 	if c, ok := connectors[dsn]; ok {
@@ -72,6 +46,7 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 
 	c := Connector{
 		dsn:               dsn,
+		driver:            driver,
 		replicationStream: DefaultStream,
 		publisherTimeout:  15 * time.Second,
 		replicas:          1,
@@ -153,25 +128,13 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 		}
 	}
 
-	c.driver = &sqlite3.SQLiteDriver{
-		Extensions: c.extensions,
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			if c.connectHook != nil {
-				if err := c.connectHook(conn); err != nil {
-					return err
-				}
-			}
-			enableCDCHooks(conn, filename, c.name, c.publisher)
-			return nil
-		},
-	}
+	c.connHooksProvider = connHooksFactory(c.name, filename, c.disableDDLSync, c.publisher)
 
 	if c.nc != nil {
 		db := sql.OpenDB(&c)
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", filename, c.name))
-
-			c.subscriber, err = NewNATSSubscriber(c.name, durable, c.nc, c.replicationStream, subject, c.deliverPolicy, db, c.interceptor)
+			c.subscriber, err = NewNATSSubscriber(c.name, durable, c.nc, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
 			}
@@ -188,7 +151,7 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 			}
 		}
 		if c.snapshotter == nil {
-			c.snapshotter, err = NewNATSSnapshotter(context.Background(), c.nc, c.replicas, c.replicationStream, db, c.snapshotInterval, c.subscriber, filename)
+			c.snapshotter, err = NewNATSSnapshotter(context.Background(), c.nc, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, filename)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start NATS snapshotter: %w", err)
 			}
@@ -201,8 +164,8 @@ func NewConnector(dsn string, options ...Option) (*Connector, error) {
 
 type Connector struct {
 	driver             driver.Driver
+	connHooksProvider  ConnHooksProvider
 	dsn                string
-	connectHook        ConnectHookFn
 	name               string
 	extensions         []string
 	embeddedNatsConfig *EmbeddedNatsConfig
@@ -226,6 +189,14 @@ type Connector struct {
 }
 
 var ErrNatsNotConfigured = errors.New("NATS not configured")
+
+func (c *Connector) NodeName() string {
+	return c.name
+}
+
+func (c *Connector) Publisher() CDCPublisher {
+	return c.publisher
+}
 
 func (c *Connector) DeliveredInfo(ctx context.Context, name string) (any, error) {
 	if c.subscriber == nil {
@@ -288,20 +259,16 @@ func (c *Connector) Close() {
 	}
 }
 
+func (c *Connector) Driver() driver.Driver {
+	return c.driver
+}
+
 func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 	conn, err := c.driver.Open(c.dsn)
 	if err != nil {
 		return nil, err
 	}
-	sqliteConn, _ := conn.(*sqlite3.SQLiteConn)
-	return &Conn{
-		SQLiteConn:     sqliteConn,
-		disableDDLSync: c.disableDDLSync,
-	}, nil
-}
-
-func (c *Connector) Driver() driver.Driver {
-	return c.driver
+	return c.connHooksProvider.RegisterHooks(conn)
 }
 
 func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequence uint64, reader io.ReadCloser, err error) {
@@ -382,138 +349,21 @@ type CDCSubscriber interface {
 	DeliveredInfo(ctx context.Context, name string) (any, error)
 }
 
+type DriverProvider interface {
+	driver.Driver
+	ConnWithoutHooks() (*sql.Conn, error)
+	EnableHooks(conn *sql.Conn)
+	OnConnect(c driver.Conn) (driver.Conn, error)
+}
+
 type ChangeSetInterceptor interface {
-	BeforeApply(*ChangeSet, *sql.DB) (skip bool, err error)
-	AfterApply(*ChangeSet, *sql.DB, error) error
+	BeforeApply(*ChangeSet, *sql.Conn) (skip bool, err error)
+	AfterApply(*ChangeSet, *sql.Conn, error) error
 }
 
 type DBSnapshotter interface {
 	TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error)
 	LatestSnapshot(ctx context.Context) (sequence uint64, reader io.ReadCloser, err error)
-}
-
-var (
-	changeSetSessions   = make(map[*sqlite3.SQLiteConn]*ChangeSet)
-	changeSetSessionsMu sync.Mutex
-)
-
-func addSQLChange(conn *sqlite3.SQLiteConn, sql string, args []any) error {
-	cs := changeSetSessions[conn]
-	if cs == nil {
-		return errors.New("no changeset session for the connection")
-	}
-	cs.AddChange(Change{
-		Operation: "SQL",
-		Command:   sql,
-		Args:      args,
-	})
-	return nil
-}
-
-func removeLastChange(conn *sqlite3.SQLiteConn) error {
-	cs := changeSetSessions[conn]
-	if cs == nil {
-		return errors.New("no changeset session for the connection")
-	}
-	if len(cs.Changes) > 0 {
-		cs.Changes = cs.Changes[:len(cs.Changes)-1]
-	}
-	return nil
-}
-
-func enableCDCHooks(conn *sqlite3.SQLiteConn, filename string, nodeName string, publisher CDCPublisher) {
-	changeSetSessionsMu.Lock()
-	defer changeSetSessionsMu.Unlock()
-
-	cs := NewChangeSet(nodeName, filename, publisher)
-	changeSetSessions[conn] = cs
-	conn.RegisterPreUpdateHook(func(d sqlite3.SQLitePreUpdateData) {
-		change, ok := getChange(&d)
-		if !ok {
-			return
-		}
-		rows, err := conn.Query(fmt.Sprintf("SELECT name, type FROM %s.PRAGMA_TABLE_INFO('%s')", change.Database, change.Table), nil)
-		if err != nil {
-			slog.Error("failed to read columns", "error", err, "database", change.Database, "table", change.Table)
-			return
-		}
-		defer rows.Close()
-		var columns, types []string
-		for {
-			dataRow := []driver.Value{new(string), new(string)}
-
-			err := rows.Next(dataRow)
-			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					slog.Error("failed to read table columns", "error", err, "table", change.Table)
-				}
-				break
-			}
-			if v, ok := dataRow[0].(string); ok {
-				columns = append(columns, v)
-			}
-			if v, ok := dataRow[1].(string); ok {
-				types = append(types, v)
-			}
-		}
-		change.Columns = columns
-
-		for i, t := range types {
-			if t != "BLOB" {
-				if i < len(change.OldValues) && change.OldValues[i] != nil {
-					change.OldValues[i] = convert(change.OldValues[i])
-				}
-				if i < len(change.NewValues) && change.NewValues[i] != nil {
-					change.NewValues[i] = convert(change.NewValues[i])
-				}
-			}
-		}
-
-		cs.AddChange(change)
-	})
-
-	conn.RegisterCommitHook(func() int {
-		if err := cs.Send(publisher); err != nil {
-			slog.Error("failed to send changeset", "error", err)
-			return 1
-		}
-		return 0
-	})
-	conn.RegisterRollbackHook(func() {
-		cs.Clear()
-	})
-}
-
-func disableCDCHooks(conn *sqlite3.SQLiteConn) {
-	conn.RegisterPreUpdateHook(nil)
-	conn.RegisterCommitHook(nil)
-	conn.RegisterRollbackHook(nil)
-}
-
-func convert(src any) any {
-	switch v := src.(type) {
-	case []byte:
-		return string(v)
-	default:
-		return src
-	}
-}
-
-func sqliteConn(conn *sql.Conn) (*sqlite3.SQLiteConn, error) {
-	var sqlite3Conn *sqlite3.SQLiteConn
-	err := conn.Raw(func(driverConn any) error {
-		switch c := driverConn.(type) {
-		case *Conn:
-			sqlite3Conn = c.SQLiteConn
-			return nil
-		case *sqlite3.SQLiteConn:
-			sqlite3Conn = c
-			return nil
-		default:
-			return fmt.Errorf("not a sqlite3 connection")
-		}
-	})
-	return sqlite3Conn, err
 }
 
 func filenameFromDSN(dsn string) string {

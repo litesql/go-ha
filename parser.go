@@ -155,7 +155,7 @@ func (s *Statement) Rollback() bool {
 	return s.typ == TypeRollback
 }
 
-func (s *Statement) sourceWithIfExists() string {
+func (s *Statement) SourceWithIfExists() string {
 	if s.hasIfExists || !s.ddl || s.typ == TypeAlterTable {
 		return s.source
 	}

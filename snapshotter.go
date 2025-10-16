@@ -37,7 +37,10 @@ func NewNoopSnapshotter() *NoopSnapshotter {
 	return &NoopSnapshotter{}
 }
 
+type BackupFn func(context.Context, *sql.DB, io.Writer) error
+
 type NATSSnapshotter struct {
+	backupFn          BackupFn
 	objectStore       jetstream.ObjectStore
 	seqProvider       SequenceProvider
 	objectName        string
@@ -45,7 +48,7 @@ type NATSSnapshotter struct {
 	mu                sync.Mutex
 }
 
-func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream string, db *sql.DB, interval time.Duration, sequenceProvider SequenceProvider, objectName string) (*NATSSnapshotter, error) {
+func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream string, db *sql.DB, backupFn BackupFn, interval time.Duration, sequenceProvider SequenceProvider, objectName string) (*NATSSnapshotter, error) {
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, err
@@ -67,6 +70,7 @@ func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream
 		}
 	}
 	s := &NATSSnapshotter{
+		backupFn:    backupFn,
 		objectStore: objectStore,
 		seqProvider: sequenceProvider,
 		objectName:  objectName,
@@ -125,7 +129,7 @@ func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequenc
 	errReaderCh := make(chan error, 1)
 	errWriterCh := make(chan error, 1)
 	go func() {
-		errWriterCh <- Backup(ctx, db, writer)
+		errWriterCh <- s.backupFn(ctx, db, writer)
 	}()
 
 	go func() {

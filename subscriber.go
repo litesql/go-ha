@@ -38,19 +38,20 @@ func NewNoopSubscriber() *NoopSubscriber {
 }
 
 type NATSSubscriber struct {
-	nc          *nats.Conn
-	js          jetstream.JetStream
-	consumer    jetstream.Consumer
-	node        string
-	durable     string
-	stream      string
-	subject     string
-	streamSeq   uint64
-	db          *sql.DB
-	interceptor ChangeSetInterceptor
+	nc           *nats.Conn
+	js           jetstream.JetStream
+	consumer     jetstream.Consumer
+	node         string
+	durable      string
+	stream       string
+	subject      string
+	streamSeq    uint64
+	db           *sql.DB
+	connProvider ConnHooksProvider
+	interceptor  ChangeSetInterceptor
 }
 
-func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subject string, policy string, db *sql.DB, interceptor ChangeSetInterceptor) (*NATSSubscriber, error) {
+func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subject string, policy string, db *sql.DB, connProvider ConnHooksProvider, interceptor ChangeSetInterceptor) (*NATSSubscriber, error) {
 	var (
 		deliverPolicy jetstream.DeliverPolicy
 		startSeq      uint64
@@ -100,14 +101,15 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subje
 	}
 
 	s := NATSSubscriber{
-		nc:          nc,
-		js:          js,
-		node:        node,
-		durable:     durable,
-		stream:      stream,
-		subject:     subject,
-		db:          db,
-		interceptor: interceptor,
+		nc:           nc,
+		js:           js,
+		node:         node,
+		durable:      durable,
+		stream:       stream,
+		subject:      subject,
+		db:           db,
+		connProvider: connProvider,
+		interceptor:  interceptor,
 	}
 
 	consumer, err := s.js.CreateConsumer(context.Background(), s.stream, jetstream.ConsumerConfig{
@@ -187,7 +189,8 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	}
 	var cs ChangeSet
 	cs.StreamSeq = meta.Sequence.Stream
-	cs.interceptor = s.interceptor
+	cs.SetConnProvider(s.connProvider)
+	cs.SetInterceptor(s.interceptor)
 	err = json.Unmarshal(msg.Data(), &cs)
 	if err != nil {
 		slog.Error("failed to unmarshal CDC message", "error", err, "stream_seq", cs.StreamSeq)

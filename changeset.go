@@ -11,26 +11,29 @@ import (
 )
 
 type ChangeSet struct {
-	interceptor ChangeSetInterceptor
-	publisher   CDCPublisher
-	Node        string   `json:"node"`
-	ProcessID   int64    `json:"process_id"`
-	Filename    string   `json:"filename"`
-	Changes     []Change `json:"changes"`
-	Timestamp   int64    `json:"timestamp_ns"`
-	StreamSeq   uint64   `json:"-"`
+	interceptor  ChangeSetInterceptor
+	connProvider ConnHooksProvider
+	Node         string   `json:"node"`
+	ProcessID    int64    `json:"process_id"`
+	Filename     string   `json:"filename"`
+	Changes      []Change `json:"changes"`
+	Timestamp    int64    `json:"timestamp_ns"`
+	StreamSeq    uint64   `json:"-"`
 }
 
-func NewChangeSet(node string, filename string, publisher CDCPublisher) *ChangeSet {
+func NewChangeSet(node string, filename string) *ChangeSet {
 	return &ChangeSet{
-		Node:      node,
-		Filename:  filename,
-		publisher: publisher,
+		Node:     node,
+		Filename: filename,
 	}
 }
 
 func (cs *ChangeSet) SetInterceptor(interceptor ChangeSetInterceptor) {
 	cs.interceptor = interceptor
+}
+
+func (cs *ChangeSet) SetConnProvider(connProvider ConnHooksProvider) {
+	cs.connProvider = connProvider
 }
 
 func (cs *ChangeSet) AddChange(change Change) {
@@ -53,11 +56,20 @@ func (cs *ChangeSet) Send(pub CDCPublisher) error {
 }
 
 func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		return
+	}
+	err = cs.connProvider.DisableHooks(conn)
+	if err != nil {
+		return
+	}
+	defer cs.connProvider.EnableHooks(conn)
 	if cs.interceptor != nil {
 		defer func() {
-			err = cs.interceptor.AfterApply(cs, db, err)
+			err = cs.interceptor.AfterApply(cs, conn, err)
 		}()
-		skip, err := cs.interceptor.BeforeApply(cs, db)
+		skip, err := cs.interceptor.BeforeApply(cs, conn)
 		if err != nil {
 			return err
 		}
@@ -68,19 +80,6 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	if len(cs.Changes) == 0 {
 		return nil
 	}
-	conn, err := db.Conn(context.Background())
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	sconn, err := sqliteConn(conn)
-	if err != nil {
-		return err
-	}
-	disableCDCHooks(sconn)
-	defer enableCDCHooks(sconn, cs.Filename, cs.Node, cs.publisher)
-
 	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{
 		Isolation: sql.LevelReadCommitted,
 		ReadOnly:  false,

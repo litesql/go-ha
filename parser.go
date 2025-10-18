@@ -42,23 +42,43 @@ const (
 )
 
 type Statement struct {
-	source       string
-	hasDistinct  bool
-	hasReturning bool
-	typ          string
-	parameters   []string
-	columns      []string
-	ddl          bool
-	hasIfExists  bool
-	hasModifier  bool
+	source           string
+	hasDistinct      bool
+	hasReturning     bool
+	typ              string
+	parameters       []string
+	columns          []string
+	ddl              bool
+	hasIfExists      bool
+	hasModifier      bool
+	modifiesDatabase bool
+}
+
+func UnverifiedStatement(source string, hasDistinct bool,
+	hasReturning bool, typ string, parameters []string, columns []string,
+	ddl bool, hasIfExists bool, hasModifier bool,
+	modifiesDatabase bool) *Statement {
+	return &Statement{
+		source:           source,
+		hasDistinct:      hasDistinct,
+		hasReturning:     hasReturning,
+		typ:              typ,
+		parameters:       parameters,
+		columns:          columns,
+		ddl:              ddl,
+		hasIfExists:      hasIfExists,
+		hasModifier:      hasModifier,
+		modifiesDatabase: modifiesDatabase,
+	}
 }
 
 func ParseStatement(ctx context.Context, sql string) (*Statement, error) {
 	// PgWire Begin statement has a different syntax
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "BEGIN") {
 		return &Statement{
-			source: sql,
-			typ:    TypeBegin,
+			source:           sql,
+			typ:              TypeBegin,
+			modifiesDatabase: true,
 		}, nil
 	}
 
@@ -173,6 +193,10 @@ func (s *Statement) SourceWithIfExists() string {
 	parts := strings.SplitN(s.source, " ", 3)
 	parts = append(parts[0:2], ifExistsExpression, parts[2])
 	return strings.Join(parts, " ")
+}
+
+func (s *Statement) ModifiesDatabase() bool {
+	return s.modifiesDatabase
 }
 
 func parse(ctx context.Context, source string) ([]*Statement, error) {
@@ -326,37 +350,88 @@ func (s *sqlListener) ExitReturning_clause(ctx *parser.Returning_clauseContext) 
 func (s *sqlListener) ExitCreate_table_stmt(ctx *parser.Create_table_stmtContext) {
 	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
 	s.statement().ddl = true
+	s.statement().modifiesDatabase = true
 }
 
 func (s *sqlListener) ExitCreate_index_stmt(ctx *parser.Create_index_stmtContext) {
 	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
 	s.statement().hasModifier = ctx.UNIQUE_() != nil
 	s.statement().ddl = true
+	s.statement().modifiesDatabase = true
 }
 
 func (s *sqlListener) ExitCreate_trigger_stmt(ctx *parser.Create_trigger_stmtContext) {
 	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
 	s.statement().hasModifier = ctx.TEMPORARY_() != nil || ctx.TEMP_() != nil
 	s.statement().ddl = true
+	s.statement().modifiesDatabase = true
 }
 
 func (s *sqlListener) ExitCreate_view_stmt(ctx *parser.Create_view_stmtContext) {
 	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
 	s.statement().hasModifier = ctx.TEMPORARY_() != nil || ctx.TEMP_() != nil
 	s.statement().ddl = true
+	s.statement().modifiesDatabase = true
 }
 
 func (s *sqlListener) ExitCreate_virtual_table_stmt(ctx *parser.Create_virtual_table_stmtContext) {
 	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
 	s.statement().hasModifier = true
 	s.statement().ddl = true
+	s.statement().modifiesDatabase = true
 }
 
 func (s *sqlListener) ExitAlter_table_stmt(ctx *parser.Alter_table_stmtContext) {
 	s.statement().ddl = true
+	s.statement().modifiesDatabase = true
 }
 
 func (s *sqlListener) ExitDrop_stmt(ctx *parser.Drop_stmtContext) {
 	s.statement().hasIfExists = ctx.IF_() != nil && ctx.EXISTS_() != nil
 	s.statement().ddl = true
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitPragma_value(ctx *parser.Pragma_valueContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitInsert_stmt(ctx *parser.Insert_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitUpdate_stmt(ctx *parser.Update_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitDelete_stmt(ctx *parser.Delete_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitVacuum_stmt(ctx *parser.Vacuum_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitBegin_stmt(ctx *parser.Begin_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitCommit_stmt(ctx *parser.Commit_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitRollback_stmt(ctx *parser.Rollback_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitAnalyze_stmt(ctx *parser.Analyze_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitSavepoint_stmt(ctx *parser.Savepoint_stmtContext) {
+	s.statement().modifiesDatabase = true
+}
+
+func (s *sqlListener) ExitRelease_stmt(ctx *parser.Release_stmtContext) {
+	s.statement().modifiesDatabase = true
 }

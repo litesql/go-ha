@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -76,7 +75,10 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		}
 		c.name = hostname
 	}
-	var err error
+	var (
+		err      error
+		natsConn *nats.Conn
+	)
 	if c.embeddedNatsConfig != nil {
 		var (
 			ncs *natsClientServer
@@ -88,18 +90,16 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 				return nil, fmt.Errorf("failed to start embedded NATS server: %w", err)
 			}
 			natsClientServers[c.embeddedNatsConfig] = ncs
-			c.nc = ncs.client
-			c.ns = ncs.server
+			natsConn = ncs.client
 		} else {
 			ncs.count++
 			natsClientServers[c.embeddedNatsConfig] = ncs
-			c.nc = ncs.client
-			c.ns = ncs.server
+			natsConn = ncs.client
 		}
 	}
 
-	if c.nc == nil && c.replicationURL != "" {
-		c.nc, err = nats.Connect(c.replicationURL, c.natsOptions...)
+	if natsConn == nil && c.replicationURL != "" {
+		natsConn, err = nats.Connect(c.replicationURL, c.natsOptions...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to conect to NATS server at %q: %w", c.replicationURL, err)
 		}
@@ -112,7 +112,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(filename))
 	}
 
-	if c.nc != nil && c.publisher == nil {
+	if natsConn != nil && c.publisher == nil {
 		streamConfig := jetstream.StreamConfig{
 			Name:      c.replicationStream,
 			Replicas:  c.replicas,
@@ -122,7 +122,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			Discard:   jetstream.DiscardOld,
 			Retention: jetstream.LimitsPolicy,
 		}
-		c.publisher, err = NewNATSPublisher(c.nc, subject, c.publisherTimeout, &streamConfig)
+		c.publisher, err = NewNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
 		}
@@ -130,11 +130,11 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 
 	c.connHooksProvider = connHooksFactory(c.name, filename, c.disableDDLSync, c.publisher)
 
-	if c.nc != nil {
+	if natsConn != nil {
 		db := sql.OpenDB(&c)
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", filename, c.name))
-			c.subscriber, err = NewNATSSubscriber(c.name, durable, c.nc, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor)
+			c.subscriber, err = NewNATSSubscriber(c.name, durable, natsConn, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
 			}
@@ -151,7 +151,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			}
 		}
 		if c.snapshotter == nil {
-			c.snapshotter, err = NewNATSSnapshotter(context.Background(), c.nc, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, filename)
+			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, filename)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start NATS snapshotter: %w", err)
 			}
@@ -180,15 +180,22 @@ type Connector struct {
 	disableDDLSync     bool
 	waitFor            chan struct{}
 
-	nc          *nats.Conn
-	ns          *server.Server
 	publisher   CDCPublisher
 	subscriber  CDCSubscriber
 	interceptor ChangeSetInterceptor
 	snapshotter DBSnapshotter
 }
 
-var ErrNatsNotConfigured = errors.New("NATS not configured")
+func GetConnector(dsn string) *Connector {
+	muConnectors.Lock()
+	defer muConnectors.Unlock()
+	return connectors[dsn]
+}
+
+var (
+	ErrSubscriberNotConfigured  = errors.New("subscriber not configured")
+	ErrSnapshotterNotConfigured = errors.New("snapshotter not configured")
+)
 
 func (c *Connector) NodeName() string {
 	return c.name
@@ -200,28 +207,28 @@ func (c *Connector) Publisher() CDCPublisher {
 
 func (c *Connector) DeliveredInfo(ctx context.Context, name string) (any, error) {
 	if c.subscriber == nil {
-		return nil, ErrNatsNotConfigured
+		return nil, ErrSubscriberNotConfigured
 	}
 	return c.subscriber.DeliveredInfo(ctx, name)
 }
 
 func (c *Connector) RemoveConsumer(ctx context.Context, name string) error {
 	if c.subscriber == nil {
-		return ErrNatsNotConfigured
+		return ErrSubscriberNotConfigured
 	}
 	return c.subscriber.RemoveConsumer(ctx, name)
 }
 
 func (c *Connector) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
 	if c.snapshotter == nil {
-		return 0, ErrNatsNotConfigured
+		return 0, ErrSnapshotterNotConfigured
 	}
 	return c.snapshotter.TakeSnapshot(ctx, db)
 }
 
 func (c *Connector) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, error) {
 	if c.snapshotter == nil {
-		return 0, nil, ErrNatsNotConfigured
+		return 0, nil, ErrSnapshotterNotConfigured
 	}
 	return c.snapshotter.LatestSnapshot(ctx)
 }
@@ -253,9 +260,6 @@ func (c *Connector) Close() {
 			delete(natsClientServers, c.embeddedNatsConfig)
 		}
 		return
-	}
-	if c.nc != nil && !c.nc.IsClosed() {
-		c.nc.Close()
 	}
 }
 

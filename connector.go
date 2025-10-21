@@ -136,26 +136,45 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", filename, c.name))
 			c.subscriber, err = NewNATSSubscriber(c.name, durable, natsConn, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor)
 			if err != nil {
-				return nil, fmt.Errorf("failed to start NATS subscriber: %w", err)
-			}
-			if c.waitFor == nil {
-				err = c.subscriber.Start()
-				if err != nil {
-					return nil, fmt.Errorf("failed to start NATS subscriber consumer: %w", err)
-				}
-			} else {
-				go func() {
-					<-c.waitFor
-					c.subscriber.Start()
-				}()
+				return nil, fmt.Errorf("failed to create NATS subscriber: %w", err)
 			}
 		}
 		if c.snapshotter == nil {
 			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, filename)
 			if err != nil {
-				return nil, fmt.Errorf("failed to start NATS snapshotter: %w", err)
+				return nil, fmt.Errorf("failed to create NATS snapshotter: %w", err)
 			}
 		}
+	}
+	if c.waitFor == nil {
+		if c.subscriber != nil {
+			err = c.subscriber.Start()
+			if err != nil {
+				return nil, fmt.Errorf("failed to start subscriber: %w", err)
+			}
+		}
+		if c.snapshotter != nil {
+			err = c.snapshotter.Start()
+			if err != nil {
+				return nil, fmt.Errorf("failed to start snapshotter: %w", err)
+			}
+		}
+	} else {
+		go func() {
+			<-c.waitFor
+			if c.subscriber != nil {
+				err := c.subscriber.Start()
+				if err != nil {
+					slog.Error("failed to start subscriber", "error", err)
+				}
+			}
+			if c.snapshotter != nil {
+				err := c.snapshotter.Start()
+				if err != nil {
+					slog.Error("failed to start snapshotter", "error", err)
+				}
+			}
+		}()
 	}
 
 	connectors[dsn] = &c
@@ -203,6 +222,14 @@ func (c *Connector) NodeName() string {
 
 func (c *Connector) Publisher() CDCPublisher {
 	return c.publisher
+}
+
+func (c *Connector) Subscriber() CDCSubscriber {
+	return c.subscriber
+}
+
+func (c *Connector) Snapshotter() DBSnapshotter {
+	return c.snapshotter
 }
 
 func (c *Connector) DeliveredInfo(ctx context.Context, name string) (any, error) {
@@ -347,6 +374,7 @@ type CDCPublisher interface {
 }
 
 type CDCSubscriber interface {
+	SetDB(*sql.DB)
 	Start() error
 	LatestSeq() uint64
 	RemoveConsumer(ctx context.Context, name string) error
@@ -366,6 +394,8 @@ type ChangeSetInterceptor interface {
 }
 
 type DBSnapshotter interface {
+	SetDB(*sql.DB)
+	Start() error
 	TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error)
 	LatestSnapshot(ctx context.Context) (sequence uint64, reader io.ReadCloser, err error)
 }

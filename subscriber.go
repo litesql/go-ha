@@ -17,6 +17,10 @@ import (
 
 type NoopSubscriber struct{}
 
+func (*NoopSubscriber) SetDB(db *sql.DB) {
+
+}
+
 func (*NoopSubscriber) Start() error {
 	return nil
 }
@@ -132,6 +136,10 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subje
 
 	s.consumer = consumer
 	return &s, nil
+}
+
+func (s *NATSSubscriber) SetDB(db *sql.DB) {
+	s.db = db
 }
 
 func (s *NATSSubscriber) Start() error {

@@ -24,6 +24,14 @@ type NoopSnapshotter struct {
 	seq uint64
 }
 
+func (s *NoopSnapshotter) SetDB(_ *sql.DB) {
+
+}
+
+func (s *NoopSnapshotter) Start() error {
+	return nil
+}
+
 func (s *NoopSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
 	s.seq++
 	return s.seq, nil
@@ -45,6 +53,8 @@ type NATSSnapshotter struct {
 	seqProvider       SequenceProvider
 	objectName        string
 	latestSnapshotSeq uint64
+	db                *sql.DB
+	interval          time.Duration
 	mu                sync.Mutex
 }
 
@@ -74,30 +84,33 @@ func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream
 		objectStore: objectStore,
 		seqProvider: sequenceProvider,
 		objectName:  objectName,
+		db:          db,
+		interval:    interval,
 	}
 	s.latestSnapshotSeq, _ = s.LatestSnapshotSequence(ctx)
-	if interval > 0 {
-		go s.start(ctx, db, interval)
-	}
 	return s, nil
 }
 
-func (s *NATSSnapshotter) start(ctx context.Context, db *sql.DB, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	for {
-		select {
-		case <-ticker.C:
-			sequence, err := s.TakeSnapshot(ctx, db)
-			if err != nil {
-				slog.Error("failed to take snapshot", "error", err)
-			} else if sequence > 0 {
-				slog.Debug("snapshot taken", "sequence", sequence)
-			}
-		case <-ctx.Done():
-			ticker.Stop()
-			return
-		}
+func (s *NATSSnapshotter) SetDB(db *sql.DB) {
+	s.db = db
+}
+
+func (s *NATSSnapshotter) Start() error {
+	if s.interval <= 0 {
+		return nil
 	}
+	ticker := time.NewTicker(s.interval)
+	for {
+		sequence, err := s.TakeSnapshot(context.Background(), s.db)
+		if err != nil {
+			slog.Error("failed to take snapshot", "error", err)
+		} else if sequence > 0 {
+			slog.Debug("snapshot taken", "sequence", sequence)
+		}
+		<-ticker.C
+	}
+	return nil
+
 }
 
 func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {

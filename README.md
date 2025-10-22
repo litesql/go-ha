@@ -13,8 +13,8 @@ Go database/sql base driver providing high availability for SQLite databases.
 
 ## Drivers
 
-- [go-sqlite3-ha](github.com/litesql/go-sqlite3-ha): CGO database/sql driver
-- [go-sqlite-ha](github.com/litesql/go-sqlite-ha): CGO FREE database/sql driver
+- [go-sqlite3-ha](https://github.com/litesql/go-sqlite3-ha): CGO database/sql driver
+- [go-sqlite-ha](https://github.com/litesql/go-sqlite-ha): CGO FREE database/sql driver
 
 ## Projects using go-ha
 

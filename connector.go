@@ -154,10 +154,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			}
 		}
 		if c.snapshotter != nil {
-			err = c.snapshotter.Start()
-			if err != nil {
-				return nil, fmt.Errorf("failed to start snapshotter: %w", err)
-			}
+			c.snapshotter.Start()
 		}
 	} else {
 		go func() {
@@ -169,10 +166,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 				}
 			}
 			if c.snapshotter != nil {
-				err := c.snapshotter.Start()
-				if err != nil {
-					slog.Error("failed to start snapshotter", "error", err)
-				}
+				c.snapshotter.Start()
 			}
 		}()
 	}
@@ -246,11 +240,11 @@ func (c *Connector) RemoveConsumer(ctx context.Context, name string) error {
 	return c.subscriber.RemoveConsumer(ctx, name)
 }
 
-func (c *Connector) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
+func (c *Connector) TakeSnapshot(ctx context.Context) (sequence uint64, err error) {
 	if c.snapshotter == nil {
 		return 0, ErrSnapshotterNotConfigured
 	}
-	return c.snapshotter.TakeSnapshot(ctx, db)
+	return c.snapshotter.TakeSnapshot(ctx)
 }
 
 func (c *Connector) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, error) {
@@ -395,8 +389,8 @@ type ChangeSetInterceptor interface {
 
 type DBSnapshotter interface {
 	SetDB(*sql.DB)
-	Start() error
-	TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error)
+	Start()
+	TakeSnapshot(ctx context.Context) (sequence uint64, err error)
 	LatestSnapshot(ctx context.Context) (sequence uint64, reader io.ReadCloser, err error)
 }
 

@@ -24,15 +24,11 @@ type NoopSnapshotter struct {
 	seq uint64
 }
 
-func (s *NoopSnapshotter) SetDB(_ *sql.DB) {
+func (s *NoopSnapshotter) SetDB(_ *sql.DB) {}
 
-}
+func (s *NoopSnapshotter) Start() {}
 
-func (s *NoopSnapshotter) Start() error {
-	return nil
-}
-
-func (s *NoopSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
+func (s *NoopSnapshotter) TakeSnapshot(ctx context.Context) (sequence uint64, err error) {
 	s.seq++
 	return s.seq, nil
 }
@@ -95,13 +91,13 @@ func (s *NATSSnapshotter) SetDB(db *sql.DB) {
 	s.db = db
 }
 
-func (s *NATSSnapshotter) Start() error {
+func (s *NATSSnapshotter) Start() {
 	if s.interval <= 0 {
-		return nil
+		return
 	}
 	ticker := time.NewTicker(s.interval)
 	for {
-		sequence, err := s.TakeSnapshot(context.Background(), s.db)
+		sequence, err := s.TakeSnapshot(context.Background())
 		if err != nil {
 			slog.Error("failed to take snapshot", "error", err)
 		} else if sequence > 0 {
@@ -109,11 +105,10 @@ func (s *NATSSnapshotter) Start() error {
 		}
 		<-ticker.C
 	}
-	return nil
 
 }
 
-func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequence uint64, err error) {
+func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context) (sequence uint64, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sequence = s.seqProvider.LatestSeq()
@@ -142,7 +137,7 @@ func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context, db *sql.DB) (sequenc
 	errReaderCh := make(chan error, 1)
 	errWriterCh := make(chan error, 1)
 	go func() {
-		errWriterCh <- s.backupFn(ctx, db, writer)
+		errWriterCh <- s.backupFn(ctx, s.db, writer)
 	}()
 
 	go func() {

@@ -191,6 +191,12 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 	return &c, nil
 }
 
+func Shutdown() {
+	for _, connector := range connectors {
+		connector.Close()
+	}
+}
+
 type Connector struct {
 	driver                  driver.Driver
 	connHooksProvider       ConnHooksProvider

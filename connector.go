@@ -34,7 +34,7 @@ type ConnHooksProvider interface {
 	EnableHooks(*sql.Conn) error
 }
 
-type ConnHooksFactory func(nodeName string, filename string, disableDDSSync bool, publisher CDCPublisher) ConnHooksProvider
+type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher CDCPublisher) ConnHooksProvider
 
 func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
 	muConnectors.Lock()
@@ -122,9 +122,24 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			Discard:   jetstream.DiscardOld,
 			Retention: jetstream.LimitsPolicy,
 		}
-		c.publisher, err = NewNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
+		if c.asyncPublisher {
+			db := sql.OpenDB(&noHooksConnector{
+				driver: driver,
+				dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(filename, ".db")+"_outbox.db"),
+			})
+
+			asyncPublisher, err := NewAsyncNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig, db)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start async NATS publisher: %w", err)
+			}
+			c.publisher = asyncPublisher
+			c.closers = append(c.closers, asyncPublisher)
+			c.closers = append(c.closers, db)
+		} else {
+			c.publisher, err = NewNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
+			}
 		}
 	}
 
@@ -132,6 +147,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 
 	if natsConn != nil {
 		db := sql.OpenDB(&c)
+		c.closers = append(c.closers, db)
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", filename, c.name))
 			c.subscriber, err = NewNATSSubscriber(c.name, durable, natsConn, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor)
@@ -176,27 +192,31 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 }
 
 type Connector struct {
-	driver             driver.Driver
-	connHooksProvider  ConnHooksProvider
-	dsn                string
-	name               string
-	extensions         []string
-	embeddedNatsConfig *EmbeddedNatsConfig
-	replicas           int
-	streamMaxAge       time.Duration
-	replicationURL     string
-	natsOptions        []nats.Option
-	replicationStream  string
-	deliverPolicy      string
-	publisherTimeout   time.Duration
-	snapshotInterval   time.Duration
-	disableDDLSync     bool
-	waitFor            chan struct{}
+	driver                  driver.Driver
+	connHooksProvider       ConnHooksProvider
+	dsn                     string
+	name                    string
+	extensions              []string
+	embeddedNatsConfig      *EmbeddedNatsConfig
+	replicas                int
+	streamMaxAge            time.Duration
+	replicationURL          string
+	natsOptions             []nats.Option
+	replicationStream       string
+	deliverPolicy           string
+	publisherTimeout        time.Duration
+	asyncPublisher          bool
+	asyncPublisherOutboxDir string
+	snapshotInterval        time.Duration
+	disableDDLSync          bool
+	waitFor                 chan struct{}
 
 	publisher   CDCPublisher
 	subscriber  CDCSubscriber
 	interceptor ChangeSetInterceptor
 	snapshotter DBSnapshotter
+
+	closers []io.Closer
 }
 
 func GetConnector(dsn string) *Connector {
@@ -262,6 +282,10 @@ func (c *Connector) LatestSeq() uint64 {
 }
 
 func (c *Connector) Close() {
+	for _, closer := range c.closers {
+		closer.Close()
+	}
+
 	muConnectors.Lock()
 	defer muConnectors.Unlock()
 
@@ -294,6 +318,19 @@ func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 		return nil, err
 	}
 	return c.connHooksProvider.RegisterHooks(conn)
+}
+
+type noHooksConnector struct {
+	driver driver.Driver
+	dsn    string
+}
+
+func (c *noHooksConnector) Driver() driver.Driver {
+	return c.driver
+}
+
+func (c *noHooksConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	return c.driver.Open(c.dsn)
 }
 
 func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequence uint64, reader io.ReadCloser, err error) {

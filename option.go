@@ -103,6 +103,18 @@ func WithPublisherTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithAsyncPublisher() Option {
+	return func(c *Connector) {
+		c.asyncPublisher = true
+	}
+}
+
+func WithAsyncPublisherOutboxDir(dir string) Option {
+	return func(c *Connector) {
+		c.asyncPublisherOutboxDir = dir
+	}
+}
+
 func WithSnapshotInterval(interval time.Duration) Option {
 	return func(c *Connector) {
 		c.snapshotInterval = interval

@@ -2,9 +2,13 @@ package ha
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -110,4 +114,91 @@ func (p *NATSPublisher) Publish(cs *ChangeSet) error {
 	}
 	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	return nil
+}
+
+type AsyncNATSPublisher struct {
+	*NATSPublisher
+	db    *sql.DB
+	mu    sync.Mutex
+	close chan struct{}
+}
+
+func NewAsyncNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig, db *sql.DB) (*AsyncNATSPublisher, error) {
+	pub, err := NewNATSPublisher(nc, subject, timeout, streamConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = db.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS ha_outbox(subject TEXT, changeset BLOB, timestamp DATETIME);`)
+	if err != nil {
+		return nil, fmt.Errorf("create outbox table: %w", err)
+	}
+
+	asyncPub := &AsyncNATSPublisher{
+		NATSPublisher: pub,
+		close:         make(chan struct{}),
+		db:            db,
+	}
+	go asyncPub.start()
+
+	return asyncPub, nil
+}
+
+func (p *AsyncNATSPublisher) Publish(cs *ChangeSet) error {
+	cs.ProcessID = processID
+	data, err := json.Marshal(cs)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	_, err = p.db.Exec("INSERT INTO ha_outbox(subject, changeset, timestamp) VALUES(?, ?, ?)", p.subject, string(data), time.Now())
+	p.mu.Unlock()
+	return err
+}
+
+func (p *AsyncNATSPublisher) Close() error {
+	if p.close != nil {
+		close(p.close)
+	}
+	return nil
+}
+
+func (p *AsyncNATSPublisher) start() {
+	for {
+		select {
+		case <-p.close:
+			return
+		default:
+			p.relay()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+func (p *AsyncNATSPublisher) relay() {
+	var (
+		id        int
+		changeset string
+	)
+	err := p.db.QueryRow("SELECT rowid, changeset FROM ha_outbox WHERE subject = ? ORDER BY timestamp, rowid LIMIT 1", p.subject).Scan(&id, &changeset)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("async publisher relay query outbox", "error", err)
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+	pubAck, err := p.js.Publish(ctx, p.subject, []byte(changeset))
+	if err != nil {
+		slog.Error("async publisher relay publish", "error", err)
+		return
+	}
+	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
+	p.mu.Lock()
+	_, err = p.db.Exec("DELETE FROM ha_outbox WHERE rowid = ?", id)
+	p.mu.Unlock()
+	if err != nil {
+		slog.Error("async publisher relay remove from outbox", "error", err)
+	}
 }

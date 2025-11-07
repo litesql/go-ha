@@ -151,7 +151,7 @@ func (p *AsyncNATSPublisher) Publish(cs *ChangeSet) error {
 		return err
 	}
 	p.mu.Lock()
-	_, err = p.db.Exec("INSERT INTO ha_outbox(subject, changeset, timestamp) VALUES(?, ?, ?)", p.subject, string(data), time.Now())
+	_, err = p.db.Exec("INSERT INTO ha_outbox(subject, changeset, timestamp) VALUES(?, ?, ?)", p.subject, data, time.Now())
 	p.mu.Unlock()
 	return err
 }
@@ -178,7 +178,7 @@ func (p *AsyncNATSPublisher) start() {
 func (p *AsyncNATSPublisher) relay() {
 	var (
 		id        int
-		changeset string
+		changeset []byte
 	)
 	err := p.db.QueryRow("SELECT rowid, changeset FROM ha_outbox WHERE subject = ? ORDER BY timestamp, rowid LIMIT 1", p.subject).Scan(&id, &changeset)
 	if err != nil {
@@ -189,7 +189,7 @@ func (p *AsyncNATSPublisher) relay() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
-	pubAck, err := p.js.Publish(ctx, p.subject, []byte(changeset))
+	pubAck, err := p.js.Publish(ctx, p.subject, changeset)
 	if err != nil {
 		slog.Error("async publisher relay publish", "error", err)
 		return

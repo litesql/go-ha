@@ -105,11 +105,15 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		}
 	}
 
-	filename := filenameFromDSN(dsn)
+	if c.cdcID == "" {
+		c.cdcID = filenameFromDSN(dsn)
+		if c.cdcID != "" {
+			c.cdcID = filepath.Base(c.cdcID)
+		}
+	}
 	subject := c.replicationStream
-	if filename != "" {
-		filename = filepath.Base(filename)
-		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(filename))
+	if c.cdcID != "" {
+		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(c.cdcID))
 	}
 
 	if natsConn != nil && c.publisher == nil {
@@ -125,7 +129,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		if c.asyncPublisher {
 			db := sql.OpenDB(&noHooksConnector{
 				driver: driver,
-				dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(filename, ".db")+"_outbox.db"),
+				dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(c.cdcID, ".db")+"_outbox.db"),
 			})
 
 			asyncPublisher, err := NewAsyncNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig, db)
@@ -143,20 +147,20 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		}
 	}
 
-	c.connHooksProvider = connHooksFactory(c.name, filename, c.disableDDLSync, c.publisher)
+	c.connHooksProvider = connHooksFactory(c.name, c.cdcID, c.disableDDLSync, c.publisher)
 
 	if natsConn != nil {
 		db := sql.OpenDB(&c)
 		c.closers = append(c.closers, db)
 		if c.subscriber == nil {
-			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", filename, c.name))
+			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.cdcID, c.name))
 			c.subscriber, err = NewNATSSubscriber(c.name, durable, natsConn, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create NATS subscriber: %w", err)
 			}
 		}
 		if c.snapshotter == nil {
-			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, filename)
+			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, c.cdcID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create NATS snapshotter: %w", err)
 			}
@@ -215,6 +219,7 @@ type Connector struct {
 	asyncPublisherOutboxDir string
 	snapshotInterval        time.Duration
 	disableDDLSync          bool
+	cdcID                   string
 	waitFor                 chan struct{}
 
 	publisher   CDCPublisher

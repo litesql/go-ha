@@ -73,6 +73,12 @@ func WithDeliverPolicy(deliverPolicy string) Option {
 	}
 }
 
+func WithCDCID(id string) Option {
+	return func(c *Connector) {
+		c.cdcID = id
+	}
+}
+
 func WithCDCPublisher(pub CDCPublisher) Option {
 	return func(c *Connector) {
 		c.publisher = pub
@@ -192,6 +198,8 @@ func NameToOptions(name string) (string, []Option, error) {
 			}
 		case "asyncPublisherOutboxDir":
 			opts = append(opts, WithAsyncPublisherOutboxDir(value))
+		case "cdcID":
+			opts = append(opts, WithCDCID(value))
 		case "replicas":
 			replicas, err := strconv.Atoi(value)
 			if err != nil {

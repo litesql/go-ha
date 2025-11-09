@@ -22,6 +22,7 @@ Go database/sql base driver providing high availability for SQLite databases.
 |-------------------------|-------------------------------------------------------------------------------------------------|-----------------|
 | asyncPublisher          | Enables asynchronous publishing of replication events.                                         | false           |
 | asyncPublisherOutboxDir | Directory to store outbox files for asynchronous publishing.                                   |                 |
+| cdcID                   | Change Data Captures ID | [database filename] |
 | deliverPolicy           | Specifies the delivery policy for replication events. Options include `all`, `last`, etc.     | all             |
 | disableCDCSubscriber    | Disables the Change Data Capture (CDC) subscriber for replication.                             | false           |
 | disableCDCPublisher     | Disables the Change Data Capture (CDC) publisher for replication.                              | false           |

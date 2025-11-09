@@ -16,6 +16,30 @@ Go database/sql base driver providing high availability for SQLite databases.
 - [go-sqlite3-ha](https://github.com/litesql/go-sqlite3-ha): CGO database/sql driver
 - [go-sqlite-ha](https://github.com/litesql/go-sqlite-ha): CGO FREE database/sql driver
 
+## Options
+
+| Option                  | Description                                                                                     | Default         |
+|-------------------------|-------------------------------------------------------------------------------------------------|-----------------|
+| asyncPublisher          | Enables asynchronous publishing of replication events.                                         | false           |
+| asyncPublisherOutboxDir | Directory to store outbox files for asynchronous publishing.                                   |                 |
+| deliverPolicy           | Specifies the delivery policy for replication events. Options include `all`, `last`, etc.     | all             |
+| disableCDCSubscriber    | Disables the Change Data Capture (CDC) subscriber for replication.                             | false           |
+| disableCDCPublisher     | Disables the Change Data Capture (CDC) publisher for replication.                              | false           |
+| disableDBSnapshotter    | Disables the database snapshotter used for initial synchronization.                            | false           |
+| disableDDLSync          | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
+| name                    | Specifies the name of the node in the cluster.                                                 |                 |
+| natsConfigFile          | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |
+| natsName                | Sets the name of the embedded NATS server.                                                     |                 |
+| natsPort                | Configures the port for the embedded NATS server.                                              | 4222            |
+| natsStoreDir            | Directory to store data for the embedded NATS server.                                          |                 |
+| publisherTimeout        | Timeout duration for publishing replication events.                                            | 5s              |
+| replicationStream       | Name of the replication stream used for synchronizing data.                                    |                 |
+| replicationURL          | URL used for connecting to the replication stream.                                             |                 |
+| replicas                | Number of replicas to maintain for high availability.                                          | 1               |
+| snapshotInterval        | Interval for taking database snapshots.                                                        | 1m              |
+| streamMaxAge            | Maximum age of messages in the replication stream before they are removed.                     | 24h             |
+
+
 ## Projects using go-ha
 
 - [HA](https://github.com/litesql/ha): Highly available leaderless SQLite cluster with HTTP and PostgreSQL Wire Protocol

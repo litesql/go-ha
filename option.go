@@ -182,6 +182,16 @@ func NameToOptions(name string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid publisherTimeout: %w", err)
 			}
 			opts = append(opts, WithPublisherTimeout(timeout))
+		case "asyncPublisher":
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid asyncPublisher: %w", err)
+			}
+			if b {
+				opts = append(opts, WithAsyncPublisher())
+			}
+		case "asyncPublisherOutboxDir":
+			opts = append(opts, WithAsyncPublisherOutboxDir(value))
 		case "replicas":
 			replicas, err := strconv.Atoi(value)
 			if err != nil {

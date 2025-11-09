@@ -199,6 +199,23 @@ func (s *Statement) ModifiesDatabase() bool {
 	return s.modifiesDatabase
 }
 
+func (s *Statement) equals(other *Statement) bool {
+	if s == nil || other == nil {
+		return s == other
+	}
+	if slices.Compare(s.columns, other.columns) != 0 {
+		return false
+	}
+	if slices.Compare(s.parameters, other.parameters) != 0 {
+		return false
+	}
+	if s.hasDistinct != other.hasDistinct {
+		return false
+	}
+
+	return true
+}
+
 func parse(ctx context.Context, source string) ([]*Statement, error) {
 	slog.DebugContext(ctx, "Parse", "sql", source)
 	input := antlr.NewInputStream(source)

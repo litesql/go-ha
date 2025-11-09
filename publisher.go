@@ -192,6 +192,7 @@ func (p *AsyncNATSPublisher) relay() {
 	pubAck, err := p.js.Publish(ctx, p.subject, changeset)
 	if err != nil {
 		slog.Error("async publisher relay publish", "error", err)
+		time.Sleep(5 * time.Second)
 		return
 	}
 	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)

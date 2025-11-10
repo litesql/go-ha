@@ -41,33 +41,41 @@ func NewNoopSubscriber() *NoopSubscriber {
 	return &NoopSubscriber{}
 }
 
-type PubSequenceProvider interface {
-	Sequence() uint64
-	SetSequence(uint64)
-}
-
 type NATSSubscriber struct {
-	nc               *nats.Conn
-	js               jetstream.JetStream
-	consumer         jetstream.Consumer
-	node             string
-	durable          string
-	stream           string
-	subject          string
-	streamSeq        uint64
-	db               *sql.DB
-	connProvider     ConnHooksProvider
-	interceptor      ChangeSetInterceptor
-	producerSequence PubSequenceProvider
+	nc            *nats.Conn
+	js            jetstream.JetStream
+	consumer      jetstream.Consumer
+	node          string
+	durable       string
+	stream        string
+	subject       string
+	streamSeq     uint64
+	db            *sql.DB
+	connProvider  ConnHooksProvider
+	interceptor   ChangeSetInterceptor
+	applyStrategy applyStrategyFn
 }
 
-func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subject string, policy string, db *sql.DB, connProvider ConnHooksProvider, interceptor ChangeSetInterceptor, producerSequence PubSequenceProvider) (*NATSSubscriber, error) {
+type NATSSubscriberConfig struct {
+	Node         string
+	Durable      string
+	NatsConn     *nats.Conn
+	Stream       string
+	Subject      string
+	Policy       string
+	DB           *sql.DB
+	ConnProvider ConnHooksProvider
+	Interceptor  ChangeSetInterceptor
+	RowIdentify  RowIdentify
+}
+
+func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 	var (
 		deliverPolicy jetstream.DeliverPolicy
 		startSeq      uint64
 		startTime     *time.Time
 	)
-	switch policy {
+	switch cfg.Policy {
 	case "all", "":
 		deliverPolicy = jetstream.DeliverAllPolicy
 	case "last":
@@ -75,26 +83,26 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subje
 	case "new":
 		deliverPolicy = jetstream.DeliverNewPolicy
 	default:
-		matched, err := regexp.MatchString(`^by_start_sequence=\d+`, policy)
+		matched, err := regexp.MatchString(`^by_start_sequence=\d+`, cfg.Policy)
 		if err != nil {
 			return nil, err
 		}
 		if matched {
 			deliverPolicy = jetstream.DeliverByStartSequencePolicy
-			_, err := fmt.Sscanf(policy, "by_start_sequence=%d", &startSeq)
+			_, err := fmt.Sscanf(cfg.Policy, "by_start_sequence=%d", &startSeq)
 			if err != nil {
 				return nil, fmt.Errorf("invalid CDC subscriber start sequence: %w", err)
 			}
 			break
 
 		}
-		matched, err = regexp.MatchString(`^by_start_time=\w+`, policy)
+		matched, err = regexp.MatchString(`^by_start_time=\w+`, cfg.Policy)
 		if err != nil {
 			return nil, err
 		}
 		if matched {
 			deliverPolicy = jetstream.DeliverByStartTimePolicy
-			dateTime := strings.TrimPrefix(policy, "by_start_time=")
+			dateTime := strings.TrimPrefix(cfg.Policy, "by_start_time=")
 			t, err := time.Parse(time.DateTime, dateTime)
 			if err != nil {
 				return nil, fmt.Errorf("invalid CDC subscriber start time: %w", err)
@@ -102,25 +110,35 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subje
 			startTime = &t
 			break
 		}
-		return nil, fmt.Errorf("invalid deliver policy: %s", policy)
+		return nil, fmt.Errorf("invalid deliver policy: %s", cfg.Policy)
 	}
 
-	js, err := jetstream.New(nc)
+	js, err := jetstream.New(cfg.NatsConn)
 	if err != nil {
 		return nil, err
 	}
 
+	var applyStrategy applyStrategyFn
+	switch cfg.RowIdentify {
+	case Rowid:
+		applyStrategy = rowidIdentifyStrategy
+	case Full:
+		applyStrategy = fullIdentifyStrategy
+	default:
+		return nil, fmt.Errorf("invalid row identify strategy: %v", cfg.RowIdentify)
+	}
+
 	s := NATSSubscriber{
-		nc:               nc,
-		js:               js,
-		node:             node,
-		durable:          durable,
-		stream:           stream,
-		subject:          subject,
-		db:               db,
-		connProvider:     connProvider,
-		interceptor:      interceptor,
-		producerSequence: producerSequence,
+		nc:            cfg.NatsConn,
+		js:            js,
+		node:          cfg.Node,
+		durable:       cfg.Durable,
+		stream:        cfg.Stream,
+		subject:       cfg.Subject,
+		db:            cfg.DB,
+		connProvider:  cfg.ConnProvider,
+		interceptor:   cfg.Interceptor,
+		applyStrategy: applyStrategy,
 	}
 
 	consumer, err := s.js.CreateConsumer(context.Background(), s.stream, jetstream.ConsumerConfig{
@@ -163,18 +181,17 @@ func (s *NATSSubscriber) Start() error {
 	}
 	defer s.connProvider.EnableHooks(conn)
 
-	_, err = conn.ExecContext(context.Background(), "CREATE TABLE IF NOT EXISTS ha_stats(subject TEXT UNIQUE, received_seq INTEGER, produced_seq INTEGER, updated_at DATETIME)")
+	_, err = conn.ExecContext(context.Background(), "CREATE TABLE IF NOT EXISTS ha_stats(subject TEXT UNIQUE, received_seq INTEGER, updated_at DATETIME)")
 	if err != nil {
 		return err
 	}
 
-	var recv, prod uint64
-	err = conn.QueryRowContext(context.Background(), "SELECT received_seq, produced_seq FROM ha_stats WHERE subject = ?", s.subject).Scan(&recv, &prod)
+	var recv uint64
+	err = conn.QueryRowContext(context.Background(), "SELECT received_seq FROM ha_stats WHERE subject = ?", s.subject).Scan(&recv)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	s.streamSeq = recv
-	s.producerSequence.SetSequence(prod)
 	_, err = s.consumer.Consume(s.handler)
 	if err != nil {
 		slog.Error("failed to start CDC consumer", "error", err, "durable", s.durable, "subject", s.subject)
@@ -230,6 +247,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	var cs ChangeSet
 	cs.StreamSeq = meta.Sequence.Stream
 	cs.Subject = s.subject
+	cs.SetApplyStrategy(s.applyStrategy)
 	cs.SetConnProvider(s.connProvider)
 	cs.SetInterceptor(s.interceptor)
 	err = json.Unmarshal(msg.Data(), &cs)
@@ -255,8 +273,8 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		defer s.connProvider.EnableHooks(conn)
 
 		_, err = conn.ExecContext(context.Background(),
-			"REPLACE INTO ha_stats(subject, received_seq, produced_seq, updated_at) VALUES(?, ?, ?, ?)",
-			s.subject, meta.Sequence.Stream, s.producerSequence.Sequence(), time.Now().Format(time.RFC3339))
+			"REPLACE INTO ha_stats(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+			s.subject, meta.Sequence.Stream, time.Now().Format(time.RFC3339))
 		if err != nil {
 			slog.Error("failed to update ha_stats table", "error", err)
 		}
@@ -264,7 +282,6 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		return
 	}
 	slog.Debug("received CDC message", "subject", msg.Subject(), "node", cs.Node, "changes", len(cs.Changes), "seq", meta.Sequence.Stream)
-	cs.LocalProdSeq = s.producerSequence.Sequence()
 	err = cs.Apply(s.db)
 	if err != nil {
 		slog.Error("failed to apply CDC message", "error", err, "stream_seq", cs.StreamSeq)

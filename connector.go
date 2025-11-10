@@ -25,7 +25,7 @@ const DefaultStream = "ha_replication"
 var (
 	connectors        = make(map[string]*Connector)
 	natsClientServers = make(map[*EmbeddedNatsConfig]*natsClientServer)
-	muConnectors      sync.Mutex
+	muConnectors      sync.RWMutex
 )
 
 type ConnHooksProvider interface {
@@ -37,15 +37,20 @@ type ConnHooksProvider interface {
 type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher CDCPublisher) ConnHooksProvider
 
 func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
-	muConnectors.Lock()
-	defer muConnectors.Unlock()
+	muConnectors.RLock()
 	if c, ok := connectors[dsn]; ok {
+		muConnectors.RUnlock()
 		return c, nil
 	}
+	muConnectors.RUnlock()
+
+	muConnectors.Lock()
+	defer muConnectors.Unlock()
 
 	c := Connector{
 		dsn:               dsn,
 		driver:            driver,
+		rowIdentify:       Rowid,
 		replicationStream: DefaultStream,
 		publisherTimeout:  15 * time.Second,
 		replicas:          1,
@@ -63,6 +68,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 					slog.Error("NATS connection closed.", "reason", err)
 				}
 			}),
+			nats.MaxReconnects(-1),
 		},
 	}
 	for _, opt := range options {
@@ -154,7 +160,18 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		c.closers = append(c.closers, db)
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.cdcID, c.name))
-			c.subscriber, err = NewNATSSubscriber(c.name, durable, natsConn, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor, c.publisher)
+			c.subscriber, err = NewNATSSubscriber(NATSSubscriberConfig{
+				Node:         c.name,
+				Durable:      durable,
+				NatsConn:     natsConn,
+				Stream:       c.replicationStream,
+				Subject:      subject,
+				Policy:       c.deliverPolicy,
+				DB:           db,
+				ConnProvider: c.connHooksProvider,
+				Interceptor:  c.interceptor,
+				RowIdentify:  c.rowIdentify,
+			})
 			if err != nil {
 				return nil, fmt.Errorf("failed to create NATS subscriber: %w", err)
 			}
@@ -201,6 +218,13 @@ func Shutdown() {
 	}
 }
 
+type RowIdentify string
+
+const (
+	Rowid RowIdentify = "rowid"
+	Full  RowIdentify = "full"
+)
+
 type Connector struct {
 	driver                  driver.Driver
 	connHooksProvider       ConnHooksProvider
@@ -220,6 +244,7 @@ type Connector struct {
 	snapshotInterval        time.Duration
 	disableDDLSync          bool
 	cdcID                   string
+	rowIdentify             RowIdentify
 	waitFor                 chan struct{}
 
 	publisher   CDCPublisher
@@ -231,8 +256,8 @@ type Connector struct {
 }
 
 func GetConnector(dsn string) *Connector {
-	muConnectors.Lock()
-	defer muConnectors.Unlock()
+	muConnectors.RLock()
+	defer muConnectors.RUnlock()
 	return connectors[dsn]
 }
 
@@ -413,8 +438,6 @@ func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequenc
 
 type CDCPublisher interface {
 	Publish(cs *ChangeSet) error
-	Sequence() uint64
-	SetSequence(uint64)
 }
 
 type CDCSubscriber interface {

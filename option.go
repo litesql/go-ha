@@ -145,6 +145,12 @@ func WithDisableDDLSync() Option {
 	}
 }
 
+func WithRowIdentify(i RowIdentify) Option {
+	return func(c *Connector) {
+		c.rowIdentify = i
+	}
+}
+
 func WithWaitFor(ch chan struct{}) Option {
 	return func(c *Connector) {
 		c.waitFor = ch
@@ -176,6 +182,17 @@ func NameToOptions(name string) (string, []Option, error) {
 		switch k {
 		case "name":
 			opts = append(opts, WithName(value))
+		case "rowIdentify":
+			var rowIdentify RowIdentify
+			switch value {
+			case string(Rowid):
+				rowIdentify = Rowid
+			case string(Full):
+				rowIdentify = Full
+			default:
+				return "", nil, fmt.Errorf("invalid rowIdentify value. Use rowid or full")
+			}
+			opts = append(opts, WithRowIdentify(rowIdentify))
 		case "replicationURL":
 			opts = append(opts, WithReplicationURL(value))
 		case "replicationStream":

@@ -11,23 +11,30 @@ import (
 )
 
 type ChangeSet struct {
-	interceptor  ChangeSetInterceptor
-	connProvider ConnHooksProvider
-	Node         string   `json:"node"`
-	ProcessID    int64    `json:"process_id"`
-	Filename     string   `json:"filename"`
-	Changes      []Change `json:"changes"`
-	Timestamp    int64    `json:"timestamp_ns"`
-	Subject      string   `json:"-"`
-	StreamSeq    uint64   `json:"-"`
-	LocalProdSeq uint64   `json:"-"`
+	interceptor   ChangeSetInterceptor
+	connProvider  ConnHooksProvider
+	applyStrategy applyStrategyFn
+	Node          string   `json:"node"`
+	ProcessID     int64    `json:"process_id"`
+	Filename      string   `json:"filename"`
+	Changes       []Change `json:"changes"`
+	Timestamp     int64    `json:"timestamp_ns"`
+	Subject       string   `json:"-"`
+	StreamSeq     uint64   `json:"-"`
 }
+
+type applyStrategyFn func(*ChangeSet, *sql.Tx) error
 
 func NewChangeSet(node string, filename string) *ChangeSet {
 	return &ChangeSet{
-		Node:     node,
-		Filename: filename,
+		Node:          node,
+		Filename:      filename,
+		applyStrategy: rowidIdentifyStrategy,
 	}
+}
+
+func (cs *ChangeSet) SetApplyStrategy(fn applyStrategyFn) {
+	cs.applyStrategy = fn
 }
 
 func (cs *ChangeSet) SetInterceptor(interceptor ChangeSetInterceptor) {
@@ -87,15 +94,29 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		return
 	}
 	defer tx.Rollback()
+	err = cs.applyStrategy(cs, tx)
+	if err != nil {
+		return
+	}
+	_, err = conn.ExecContext(context.Background(), "REPLACE INTO ha_stats(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339))
+	if err != nil {
+		slog.Error("failed to update ha_stats table", "error", err)
+		return
+	}
+	err = tx.Commit()
+	return
+}
+
+func fullIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 	for _, change := range cs.Changes {
-		var sql string
+		var (
+			err error
+			sql string
+		)
 		switch change.Operation {
 		case "INSERT":
-			if cs.LocalProdSeq > cs.StreamSeq {
-				sql = fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s) ON CONFLICT DO NOTHING", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
-			} else {
-				sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
-			}
+			sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
 			_, err = tx.Exec(sql, change.NewValues...)
 		case "UPDATE":
 			setClause := make([]string, len(change.Columns))
@@ -122,17 +143,51 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		if err != nil {
 			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
 			err = errors.Join(err, tx.Rollback())
-			return
+			return err
 		}
 	}
-	_, err = conn.ExecContext(context.Background(), "REPLACE INTO ha_stats(subject, received_seq, produced_seq, updated_at) VALUES(?, ?, ?, ?)",
-		cs.Subject, cs.StreamSeq, cs.LocalProdSeq, time.Now().Format(time.RFC3339))
-	if err != nil {
-		slog.Error("failed to update ha_stats table", "error", err)
-		return
+	return nil
+}
+
+func rowidIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
+	for _, change := range cs.Changes {
+		var (
+			err error
+			sql string
+		)
+		switch change.Operation {
+		case "INSERT":
+			setClause := make([]string, len(change.Columns))
+			for i, col := range change.Columns {
+				setClause[i] = fmt.Sprintf("%s = ?%d", col, i+1)
+			}
+			sql = fmt.Sprintf("INSERT INTO %s.%s (%s, rowid) VALUES (%s) ON CONFLICT DO UPDATE SET %s, rowid = ?%d;", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)+1), strings.Join(setClause, ", "), len(change.NewValues)+1)
+			_, err = tx.Exec(sql, append(change.NewValues, change.NewRowID)...)
+		case "UPDATE":
+			setClause := make([]string, len(change.Columns))
+			for i, col := range change.Columns {
+				setClause[i] = fmt.Sprintf("%s = ?", col)
+			}
+			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE rowid = ?;", change.Database, change.Table, strings.Join(setClause, ", "))
+			args := append(change.NewValues, change.OldRowID)
+			_, err = tx.Exec(sql, args...)
+		case "DELETE":
+			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE rowid = ?;", change.Database, change.Table)
+			_, err = tx.Exec(sql, change.OldRowID)
+		case "SQL":
+			sql = change.Command
+			_, err = tx.Exec(sql, change.Args...)
+		default:
+			slog.Warn("unknown operation", "operation", change.Operation)
+			continue
+		}
+		if err != nil {
+			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
+			err = errors.Join(err, tx.Rollback())
+			return err
+		}
 	}
-	err = tx.Commit()
-	return
+	return nil
 }
 
 func placeholders(n int) string {

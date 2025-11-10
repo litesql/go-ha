@@ -23,6 +23,12 @@ func (p *NoopPublisher) Publish(cs *ChangeSet) error {
 	return nil
 }
 
+func (p *NoopPublisher) Sequence() uint64 {
+	return 0
+}
+
+func (p *NoopPublisher) SetSequence(s uint64) {}
+
 func NewNoopPublisher() *NoopPublisher {
 	return &NoopPublisher{}
 }
@@ -50,6 +56,12 @@ func (p *WriterPublisher) Publish(cs *ChangeSet) error {
 	return err
 }
 
+func (p *WriterPublisher) Sequence() uint64 {
+	return 0
+}
+
+func (p *WriterPublisher) SetSequence(s uint64) {}
+
 func NewJSONPublisher(w io.Writer) *JSONPublisher {
 	return &JSONPublisher{
 		writer: w,
@@ -69,11 +81,18 @@ func (p *JSONPublisher) Publish(cs *ChangeSet) error {
 	return err
 }
 
+func (p *JSONPublisher) Sequence() uint64 {
+	return 0
+}
+
+func (p *JSONPublisher) SetSequence(s uint64) {}
+
 type NATSPublisher struct {
-	nc      *nats.Conn
-	js      jetstream.JetStream
-	timeout time.Duration
-	subject string
+	nc       *nats.Conn
+	js       jetstream.JetStream
+	timeout  time.Duration
+	subject  string
+	sequence uint64
 }
 
 func NewNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig) (*NATSPublisher, error) {
@@ -112,15 +131,27 @@ func (p *NATSPublisher) Publish(cs *ChangeSet) error {
 	if err != nil {
 		return err
 	}
+	p.sequence = pubAck.Sequence
 	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	return nil
 }
 
+func (p *NATSPublisher) Sequence() uint64 {
+	return p.sequence
+}
+
+func (p *NATSPublisher) SetSequence(s uint64) {
+	if s > p.sequence {
+		p.sequence = s
+	}
+}
+
 type AsyncNATSPublisher struct {
 	*NATSPublisher
-	db    *sql.DB
-	mu    sync.Mutex
-	close chan struct{}
+	db       *sql.DB
+	mu       sync.Mutex
+	sequence uint64
+	close    chan struct{}
 }
 
 func NewAsyncNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig, db *sql.DB) (*AsyncNATSPublisher, error) {
@@ -154,6 +185,16 @@ func (p *AsyncNATSPublisher) Publish(cs *ChangeSet) error {
 	_, err = p.db.Exec("INSERT INTO ha_outbox(subject, changeset, timestamp) VALUES(?, ?, ?)", p.subject, data, time.Now())
 	p.mu.Unlock()
 	return err
+}
+
+func (p *AsyncNATSPublisher) Sequence() uint64 {
+	return p.sequence
+}
+
+func (p *AsyncNATSPublisher) SetSequence(s uint64) {
+	if s > p.sequence {
+		p.sequence = s
+	}
 }
 
 func (p *AsyncNATSPublisher) Close() error {
@@ -195,6 +236,7 @@ func (p *AsyncNATSPublisher) relay() {
 		time.Sleep(5 * time.Second)
 		return
 	}
+	p.sequence = pubAck.Sequence
 	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	p.mu.Lock()
 	_, err = p.db.Exec("DELETE FROM ha_outbox WHERE rowid = ?", id)

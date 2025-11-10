@@ -41,21 +41,27 @@ func NewNoopSubscriber() *NoopSubscriber {
 	return &NoopSubscriber{}
 }
 
-type NATSSubscriber struct {
-	nc           *nats.Conn
-	js           jetstream.JetStream
-	consumer     jetstream.Consumer
-	node         string
-	durable      string
-	stream       string
-	subject      string
-	streamSeq    uint64
-	db           *sql.DB
-	connProvider ConnHooksProvider
-	interceptor  ChangeSetInterceptor
+type PubSequenceProvider interface {
+	Sequence() uint64
+	SetSequence(uint64)
 }
 
-func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subject string, policy string, db *sql.DB, connProvider ConnHooksProvider, interceptor ChangeSetInterceptor) (*NATSSubscriber, error) {
+type NATSSubscriber struct {
+	nc               *nats.Conn
+	js               jetstream.JetStream
+	consumer         jetstream.Consumer
+	node             string
+	durable          string
+	stream           string
+	subject          string
+	streamSeq        uint64
+	db               *sql.DB
+	connProvider     ConnHooksProvider
+	interceptor      ChangeSetInterceptor
+	producerSequence PubSequenceProvider
+}
+
+func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subject string, policy string, db *sql.DB, connProvider ConnHooksProvider, interceptor ChangeSetInterceptor, producerSequence PubSequenceProvider) (*NATSSubscriber, error) {
 	var (
 		deliverPolicy jetstream.DeliverPolicy
 		startSeq      uint64
@@ -105,15 +111,16 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subje
 	}
 
 	s := NATSSubscriber{
-		nc:           nc,
-		js:           js,
-		node:         node,
-		durable:      durable,
-		stream:       stream,
-		subject:      subject,
-		db:           db,
-		connProvider: connProvider,
-		interceptor:  interceptor,
+		nc:               nc,
+		js:               js,
+		node:             node,
+		durable:          durable,
+		stream:           stream,
+		subject:          subject,
+		db:               db,
+		connProvider:     connProvider,
+		interceptor:      interceptor,
+		producerSequence: producerSequence,
 	}
 
 	consumer, err := s.js.CreateConsumer(context.Background(), s.stream, jetstream.ConsumerConfig{
@@ -123,6 +130,7 @@ func NewNATSSubscriber(node string, durable string, nc *nats.Conn, stream, subje
 		DeliverPolicy: deliverPolicy,
 		OptStartSeq:   startSeq,
 		OptStartTime:  startTime,
+		MaxAckPending: 0,
 	})
 	if err != nil {
 		if !errors.Is(err, jetstream.ErrConsumerExists) {
@@ -143,7 +151,31 @@ func (s *NATSSubscriber) SetDB(db *sql.DB) {
 }
 
 func (s *NATSSubscriber) Start() error {
-	_, err := s.consumer.Consume(s.handler)
+	conn, err := s.db.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	err = s.connProvider.DisableHooks(conn)
+	if err != nil {
+		return err
+	}
+	defer s.connProvider.EnableHooks(conn)
+
+	_, err = conn.ExecContext(context.Background(), "CREATE TABLE IF NOT EXISTS ha_stats(subject TEXT UNIQUE, received_seq INTEGER, produced_seq INTEGER, updated_at DATETIME)")
+	if err != nil {
+		return err
+	}
+
+	var recv, prod uint64
+	err = conn.QueryRowContext(context.Background(), "SELECT received_seq, produced_seq FROM ha_stats WHERE subject = ?", s.subject).Scan(&recv, &prod)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	s.streamSeq = recv
+	s.producerSequence.SetSequence(prod)
+	_, err = s.consumer.Consume(s.handler)
 	if err != nil {
 		slog.Error("failed to start CDC consumer", "error", err, "durable", s.durable, "subject", s.subject)
 	}
@@ -197,6 +229,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	}
 	var cs ChangeSet
 	cs.StreamSeq = meta.Sequence.Stream
+	cs.Subject = s.subject
 	cs.SetConnProvider(s.connProvider)
 	cs.SetInterceptor(s.interceptor)
 	err = json.Unmarshal(msg.Data(), &cs)
@@ -207,10 +240,31 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	}
 	if cs.Node == s.node && cs.ProcessID == processID {
 		// Ignore changes originated from this process and node itself
+		conn, err := s.db.Conn(context.Background())
+		if err != nil {
+			slog.Error("failed to get db conn to process CDC message", "error", err)
+			return
+		}
+		defer conn.Close()
+
+		err = s.connProvider.DisableHooks(conn)
+		if err != nil {
+			slog.Error("failed to disable hooks on db conn to process CDC message", "error", err)
+			return
+		}
+		defer s.connProvider.EnableHooks(conn)
+
+		_, err = conn.ExecContext(context.Background(),
+			"REPLACE INTO ha_stats(subject, received_seq, produced_seq, updated_at) VALUES(?, ?, ?, ?)",
+			s.subject, meta.Sequence.Stream, s.producerSequence.Sequence(), time.Now().Format(time.RFC3339))
+		if err != nil {
+			slog.Error("failed to update ha_stats table", "error", err)
+		}
 		s.ack(msg, meta)
 		return
 	}
 	slog.Debug("received CDC message", "subject", msg.Subject(), "node", cs.Node, "changes", len(cs.Changes), "seq", meta.Sequence.Stream)
+	cs.LocalProdSeq = s.producerSequence.Sequence()
 	err = cs.Apply(s.db)
 	if err != nil {
 		slog.Error("failed to apply CDC message", "error", err, "stream_seq", cs.StreamSeq)

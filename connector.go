@@ -154,7 +154,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		c.closers = append(c.closers, db)
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.cdcID, c.name))
-			c.subscriber, err = NewNATSSubscriber(c.name, durable, natsConn, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor)
+			c.subscriber, err = NewNATSSubscriber(c.name, durable, natsConn, c.replicationStream, subject, c.deliverPolicy, db, c.connHooksProvider, c.interceptor, c.publisher)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create NATS subscriber: %w", err)
 			}
@@ -413,6 +413,8 @@ func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequenc
 
 type CDCPublisher interface {
 	Publish(cs *ChangeSet) error
+	Sequence() uint64
+	SetSequence(uint64)
 }
 
 type CDCSubscriber interface {

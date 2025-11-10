@@ -18,7 +18,9 @@ type ChangeSet struct {
 	Filename     string   `json:"filename"`
 	Changes      []Change `json:"changes"`
 	Timestamp    int64    `json:"timestamp_ns"`
+	Subject      string   `json:"-"`
 	StreamSeq    uint64   `json:"-"`
+	LocalProdSeq uint64   `json:"-"`
 }
 
 func NewChangeSet(node string, filename string) *ChangeSet {
@@ -82,30 +84,34 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	}
 	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{})
 	if err != nil {
-		return err
+		return
 	}
 	defer tx.Rollback()
 	for _, change := range cs.Changes {
 		var sql string
 		switch change.Operation {
 		case "INSERT":
-			setClause := make([]string, len(change.Columns))
-			for i, col := range change.Columns {
-				setClause[i] = fmt.Sprintf("%s = ?%d", col, i+1)
+			if cs.LocalProdSeq > cs.StreamSeq {
+				sql = fmt.Sprintf("INSERT INTO %s.%s (%s) VALUES (%s) ON CONFLICT DO NOTHING", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
+			} else {
+				sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
 			}
-			sql = fmt.Sprintf("INSERT INTO %s.%s (%s, rowid) VALUES (%s) ON CONFLICT (rowid) DO UPDATE SET %s;", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)+1), strings.Join(setClause, ", "))
-			_, err = tx.Exec(sql, append(change.NewValues, change.NewRowID)...)
+			_, err = tx.Exec(sql, change.NewValues...)
 		case "UPDATE":
 			setClause := make([]string, len(change.Columns))
 			for i, col := range change.Columns {
 				setClause[i] = fmt.Sprintf("%s = ?", col)
 			}
-			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE rowid = ?;", change.Database, change.Table, strings.Join(setClause, ", "))
-			args := append(change.NewValues, change.OldRowID)
+			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(setClause, " AND "))
+			args := append(change.NewValues, change.OldValues...)
 			_, err = tx.Exec(sql, args...)
 		case "DELETE":
-			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE rowid = ?;", change.Database, change.Table)
-			_, err = tx.Exec(sql, change.OldRowID)
+			whereClause := make([]string, len(change.Columns))
+			for i, col := range change.Columns {
+				whereClause[i] = fmt.Sprintf("%s = ?", col)
+			}
+			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
+			_, err = tx.Exec(sql, change.OldValues...)
 		case "SQL":
 			sql = change.Command
 			_, err = tx.Exec(sql, change.Args...)
@@ -116,8 +122,14 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		if err != nil {
 			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
 			err = errors.Join(err, tx.Rollback())
-			return err
+			return
 		}
+	}
+	_, err = conn.ExecContext(context.Background(), "REPLACE INTO ha_stats(subject, received_seq, produced_seq, updated_at) VALUES(?, ?, ?, ?)",
+		cs.Subject, cs.StreamSeq, cs.LocalProdSeq, time.Now().Format(time.RFC3339))
+	if err != nil {
+		slog.Error("failed to update ha_stats table", "error", err)
+		return
 	}
 	err = tx.Commit()
 	return

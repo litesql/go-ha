@@ -148,7 +148,7 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 		DeliverPolicy: deliverPolicy,
 		OptStartSeq:   startSeq,
 		OptStartTime:  startTime,
-		MaxAckPending: 0,
+		MaxAckPending: 1,
 	})
 	if err != nil {
 		if !errors.Is(err, jetstream.ErrConsumerExists) {

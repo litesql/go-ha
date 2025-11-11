@@ -284,7 +284,9 @@ func NameToOptions(name string) (string, []Option, error) {
 				opts = append(opts, WithDBSnapshotter(NewNoopSnapshotter()))
 			}
 		default:
-			dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, value))
+			for _, v := range values[k] {
+				dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, v))
+			}
 		}
 	}
 

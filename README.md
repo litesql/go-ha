@@ -22,12 +22,14 @@ Go database/sql base driver providing high availability for SQLite databases.
 |-------------------------|-------------------------------------------------------------------------------------------------|-----------------|
 | asyncPublisher          | Enables asynchronous publishing of replication events.                                         | false           |
 | asyncPublisherOutboxDir | Directory to store outbox files for asynchronous publishing.                                   |                 |
+| autoStart               | Automatically starts the subscriber and snapshotter when the node is initialized.              | true            |
 | cdcID                   | Change Data Captures ID | [database filename] |
 | deliverPolicy           | Specifies the delivery policy for replication events. Options include `all`, `last`, etc.     | all             |
 | disableCDCSubscriber    | Disables the Change Data Capture (CDC) subscriber for replication.                             | false           |
 | disableCDCPublisher     | Disables the Change Data Capture (CDC) publisher for replication.                              | false           |
 | disableDBSnapshotter    | Disables the database snapshotter used for initial synchronization.                            | false           |
 | disableDDLSync          | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
+| leaderTarget            | Specifies the target node to act as the leader in the cluster. Used to redirect HTTP requests.   |       |
 | name                    | Specifies the name of the node in the cluster.                                                 |                 |
 | natsConfigFile          | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |
 | natsName                | Sets the name of the embedded NATS server.                                                     |                 |

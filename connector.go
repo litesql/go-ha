@@ -37,12 +37,10 @@ type ConnHooksProvider interface {
 type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher CDCPublisher) ConnHooksProvider
 
 func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
-	muConnectors.RLock()
-	if c, ok := connectors[dsn]; ok {
-		muConnectors.RUnlock()
-		return c, nil
+	connector := LookupConnector(dsn)
+	if connector != nil {
+		return connector, nil
 	}
-	muConnectors.RUnlock()
 
 	muConnectors.Lock()
 	defer muConnectors.Unlock()
@@ -54,6 +52,8 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		replicationStream: DefaultStream,
 		publisherTimeout:  15 * time.Second,
 		replicas:          1,
+		leaderProvider:    &StaticLeader{},
+		autoStart:         true,
 		natsOptions: []nats.Option{
 			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 				if err != nil {
@@ -107,7 +107,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 	if natsConn == nil && c.replicationURL != "" {
 		natsConn, err = nats.Connect(c.replicationURL, c.natsOptions...)
 		if err != nil {
-			return nil, fmt.Errorf("failed to conect to NATS server at %q: %w", c.replicationURL, err)
+			return nil, fmt.Errorf("failed to connect to NATS server at %q: %w", c.replicationURL, err)
 		}
 	}
 
@@ -183,29 +183,31 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			}
 		}
 	}
-	if c.waitFor == nil {
-		if c.subscriber != nil {
-			err = c.subscriber.Start()
-			if err != nil {
-				return nil, fmt.Errorf("failed to start subscriber: %w", err)
-			}
-		}
-		if c.snapshotter != nil {
-			c.snapshotter.Start()
-		}
-	} else {
-		go func() {
-			<-c.waitFor
+	if c.autoStart {
+		if c.waitFor == nil {
 			if c.subscriber != nil {
-				err := c.subscriber.Start()
+				err = c.subscriber.Start()
 				if err != nil {
-					slog.Error("failed to start subscriber", "error", err)
+					return nil, fmt.Errorf("failed to start subscriber: %w", err)
 				}
 			}
 			if c.snapshotter != nil {
 				c.snapshotter.Start()
 			}
-		}()
+		} else {
+			go func() {
+				<-c.waitFor
+				if c.subscriber != nil {
+					err := c.subscriber.Start()
+					if err != nil {
+						slog.Error("failed to start subscriber", "error", err)
+					}
+				}
+				if c.snapshotter != nil {
+					c.snapshotter.Start()
+				}
+			}()
+		}
 	}
 
 	connectors[dsn] = &c
@@ -245,6 +247,7 @@ type Connector struct {
 	disableDDLSync          bool
 	cdcID                   string
 	rowIdentify             RowIdentify
+	autoStart               bool
 	waitFor                 chan struct{}
 
 	publisher   CDCPublisher
@@ -252,10 +255,12 @@ type Connector struct {
 	interceptor ChangeSetInterceptor
 	snapshotter DBSnapshotter
 
+	leaderProvider LeaderProvider
+
 	closers []io.Closer
 }
 
-func GetConnector(dsn string) *Connector {
+func LookupConnector(dsn string) *Connector {
 	muConnectors.RLock()
 	defer muConnectors.RUnlock()
 	return connectors[dsn]
@@ -438,6 +443,7 @@ func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequenc
 
 type CDCPublisher interface {
 	Publish(cs *ChangeSet) error
+	Sequence() uint64
 }
 
 type CDCSubscriber interface {
@@ -446,13 +452,6 @@ type CDCSubscriber interface {
 	LatestSeq() uint64
 	RemoveConsumer(ctx context.Context, name string) error
 	DeliveredInfo(ctx context.Context, name string) (any, error)
-}
-
-type DriverProvider interface {
-	driver.Driver
-	ConnWithoutHooks() (*sql.Conn, error)
-	EnableHooks(conn *sql.Conn)
-	OnConnect(c driver.Conn) (driver.Conn, error)
 }
 
 type ChangeSetInterceptor interface {
@@ -465,6 +464,11 @@ type DBSnapshotter interface {
 	Start()
 	TakeSnapshot(ctx context.Context) (sequence uint64, err error)
 	LatestSnapshot(ctx context.Context) (sequence uint64, reader io.ReadCloser, err error)
+}
+
+type LeaderProvider interface {
+	IsLeader() bool
+	RedirectTarget() string
 }
 
 func filenameFromDSN(dsn string) string {

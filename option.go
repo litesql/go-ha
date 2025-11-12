@@ -3,6 +3,7 @@ package ha
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -151,9 +152,21 @@ func WithRowIdentify(i RowIdentify) Option {
 	}
 }
 
+func WithLeader(p LeaderProvider) Option {
+	return func(c *Connector) {
+		c.leaderProvider = p
+	}
+}
+
 func WithWaitFor(ch chan struct{}) Option {
 	return func(c *Connector) {
 		c.waitFor = ch
+	}
+}
+
+func WithAutoStart(enabled bool) Option {
+	return func(c *Connector) {
+		c.autoStart = enabled
 	}
 }
 
@@ -171,10 +184,19 @@ func NameToOptions(name string) (string, []Option, error) {
 	if err != nil {
 		return "", nil, err
 	}
+
+	// Sort the keys to ensure deterministic order
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
 	var opts []Option
 	var dsnOptions []string
 	var natsConfig EmbeddedNatsConfig
-	for k, v := range values {
+	for _, k := range keys {
+		v := values[k]
 		if len(v) == 0 {
 			continue
 		}
@@ -283,6 +305,16 @@ func NameToOptions(name string) (string, []Option, error) {
 			if disable {
 				opts = append(opts, WithDBSnapshotter(NewNoopSnapshotter()))
 			}
+		case "leaderTarget":
+			opts = append(opts, WithLeader(&StaticLeader{
+				Target: value,
+			}))
+		case "autoStart":
+			autoStart, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid autoStart: %w", err)
+			}
+			opts = append(opts, WithAutoStart(autoStart))
 		default:
 			for _, v := range values[k] {
 				dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, v))
@@ -293,6 +325,9 @@ func NameToOptions(name string) (string, []Option, error) {
 	if !natsConfig.empty() {
 		opts = append(opts, WithEmbeddedNatsConfig(&natsConfig))
 	}
+
+	// Sort DSN options to ensure deterministic order
+	slices.Sort(dsnOptions)
 
 	if len(dsnOptions) > 0 {
 		dsn = fmt.Sprintf("%s?%s", dsn, strings.Join(dsnOptions, "&"))

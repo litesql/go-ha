@@ -37,15 +37,15 @@ type ConnHooksProvider interface {
 type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher CDCPublisher) ConnHooksProvider
 
 func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
-	connector := LookupConnector(dsn)
-	if connector != nil {
-		return connector, nil
+	if c, ok := LookupConnector(dsn); ok {
+		return c, nil
 	}
 
 	muConnectors.Lock()
 	defer muConnectors.Unlock()
 
 	c := Connector{
+		clusterSize:       1,
 		dsn:               dsn,
 		driver:            driver,
 		rowIdentify:       Rowid,
@@ -120,6 +120,18 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 	subject := c.replicationStream
 	if c.cdcID != "" {
 		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(c.cdcID))
+	}
+
+	if c.leaderElectionLocalTarget != "" {
+		if natsConn == nil {
+			return nil, fmt.Errorf("no NATS connection available to start leader election")
+		}
+		leaderProvider, err := startLeaderElection(context.Background(),
+			c.leaderElectionLocalTarget, natsConn, subject, c.clusterSize, filepath.Join(os.TempDir(), fmt.Sprintf("ha-election-%s.log", c.name)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to start leader election: %w", err)
+		}
+		c.leaderProvider = leaderProvider
 	}
 
 	if natsConn != nil && c.publisher == nil {
@@ -248,6 +260,7 @@ type Connector struct {
 	cdcID                   string
 	rowIdentify             RowIdentify
 	autoStart               bool
+	clusterSize             int
 	waitFor                 chan struct{}
 
 	publisher   CDCPublisher
@@ -255,21 +268,44 @@ type Connector struct {
 	interceptor ChangeSetInterceptor
 	snapshotter DBSnapshotter
 
-	leaderProvider LeaderProvider
+	leaderElectionLocalTarget string
+	leaderProvider            LeaderProvider
 
 	closers []io.Closer
 }
 
-func LookupConnector(dsn string) *Connector {
+func LookupConnector(dsn string) (*Connector, bool) {
+	key, _, _ := NameToOptions(dsn)
 	muConnectors.RLock()
 	defer muConnectors.RUnlock()
-	return connectors[dsn]
+	conn, ok := connectors[key]
+	return conn, ok
 }
 
 var (
 	ErrSubscriberNotConfigured  = errors.New("subscriber not configured")
 	ErrSnapshotterNotConfigured = errors.New("snapshotter not configured")
 )
+
+func (c *Connector) Start(db *sql.DB) error {
+	if c.autoStart {
+		return nil
+	}
+	var err error
+	if c.subscriber != nil {
+		if db != nil {
+			c.subscriber.SetDB(db)
+		}
+		err = c.subscriber.Start()
+	}
+	if c.snapshotter != nil {
+		if db != nil {
+			c.snapshotter.SetDB(db)
+		}
+		c.snapshotter.Start()
+	}
+	return err
+}
 
 func (c *Connector) NodeName() string {
 	return c.name
@@ -320,6 +356,10 @@ func (c *Connector) LatestSeq() uint64 {
 		return 0
 	}
 	return c.subscriber.LatestSeq()
+}
+
+func (c *Connector) LeaderProvider() LeaderProvider {
+	return c.leaderProvider
 }
 
 func (c *Connector) Close() {
@@ -468,6 +508,7 @@ type DBSnapshotter interface {
 
 type LeaderProvider interface {
 	IsLeader() bool
+	Ready() chan struct{}
 	RedirectTarget() string
 }
 

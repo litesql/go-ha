@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -42,6 +43,8 @@ func NewNoopSubscriber() *NoopSubscriber {
 }
 
 type NATSSubscriber struct {
+	mu            sync.Mutex
+	started       bool
 	nc            *nats.Conn
 	js            jetstream.JetStream
 	consumer      jetstream.Consumer
@@ -192,11 +195,20 @@ func (s *NATSSubscriber) Start() error {
 		return err
 	}
 	s.streamSeq = recv
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		return nil
+	}
+	s.started = true
+	s.mu.Unlock()
 	_, err = s.consumer.Consume(s.handler)
 	if err != nil {
 		slog.Error("failed to start CDC consumer", "error", err, "durable", s.durable, "subject", s.subject)
+		return err
 	}
-	return err
+
+	return nil
 }
 
 func (s *NATSSubscriber) LatestSeq() uint64 {

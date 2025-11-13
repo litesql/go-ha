@@ -29,8 +29,8 @@ Go database/sql base driver providing high availability for SQLite databases.
 | disableCDCPublisher     | Disables the Change Data Capture (CDC) publisher for replication.                              | false           |
 | disableDBSnapshotter    | Disables the database snapshotter used for initial synchronization.                            | false           |
 | disableDDLSync          | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
-| leaderTarget            | Specifies the target node to act as the leader in the cluster. Used to redirect HTTP requests.   |       |
-| name                    | Specifies the name of the node in the cluster.                                                 |                 |
+| leaderProvider            | Defines the strategy for determining a leader node in the cluster. This is useful for redirecting HTTP requests. Examples include `dynamic:http://host:port` or `static:http://host:port`.   |       |
+| name                    | Specifies the name of the node in the cluster.                                    |                 |
 | natsConfigFile          | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |
 | natsName                | Sets the name of the embedded NATS server.                                                     |                 |
 | natsPort                | Configures the port for the embedded NATS server.                                              | 4222            |

@@ -12,18 +12,6 @@ import (
 	"time"
 )
 
-type StaticLeader struct {
-	Target string
-}
-
-func (s *StaticLeader) IsLeader() bool {
-	return s.Target == ""
-}
-
-func (s *StaticLeader) RedirectTarget() string {
-	return s.Target
-}
-
 const txCookieName = "_txseq"
 
 func (c *Connector) ForwardToLeader(timeout time.Duration, methods ...string) func(http.Handler) http.Handler {

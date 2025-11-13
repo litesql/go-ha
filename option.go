@@ -152,7 +152,13 @@ func WithRowIdentify(i RowIdentify) Option {
 	}
 }
 
-func WithLeader(p LeaderProvider) Option {
+func WithLeaderElectionLocalTarget(localEndpoint string) Option {
+	return func(c *Connector) {
+		c.leaderElectionLocalTarget = localEndpoint
+	}
+}
+
+func WithLeaderProvider(p LeaderProvider) Option {
 	return func(c *Connector) {
 		c.leaderProvider = p
 	}
@@ -167,6 +173,12 @@ func WithWaitFor(ch chan struct{}) Option {
 func WithAutoStart(enabled bool) Option {
 	return func(c *Connector) {
 		c.autoStart = enabled
+	}
+}
+
+func WithClusterSize(size int) Option {
+	return func(c *Connector) {
+		c.clusterSize = size
 	}
 }
 
@@ -239,6 +251,12 @@ func NameToOptions(name string) (string, []Option, error) {
 			opts = append(opts, WithAsyncPublisherOutboxDir(value))
 		case "cdcID":
 			opts = append(opts, WithCDCID(value))
+		case "clusterSize":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid clusterSize: %w", err)
+			}
+			opts = append(opts, WithClusterSize(size))
 		case "replicas":
 			replicas, err := strconv.Atoi(value)
 			if err != nil {
@@ -305,10 +323,22 @@ func NameToOptions(name string) (string, []Option, error) {
 			if disable {
 				opts = append(opts, WithDBSnapshotter(NewNoopSnapshotter()))
 			}
-		case "leaderTarget":
-			opts = append(opts, WithLeader(&StaticLeader{
-				Target: value,
-			}))
+		case "leaderProvider":
+			typ, target, ok := strings.Cut(value, ":")
+			if !ok {
+				return "", nil, fmt.Errorf("invalid leaderStrategy. Use leaderStrategy=dynamic:http://localhost:8080 or leaderStrategy=static:http://host:port")
+			}
+			switch typ {
+			case "dynamic":
+				opts = append(opts, WithLeaderElectionLocalTarget(target))
+			case "static":
+				opts = append(opts, WithLeaderProvider(&StaticLeader{
+					Target: target,
+				}))
+			default:
+				return "", nil, fmt.Errorf("invalid leaderStrategy, prefix with static or dynamic option. Examples: leaderStrategy=dynamic:http://localhost:8080 or leaderStrategy=static:http://host:port")
+			}
+
 		case "autoStart":
 			autoStart, err := strconv.ParseBool(value)
 			if err != nil {

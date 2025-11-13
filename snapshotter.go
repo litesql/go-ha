@@ -44,6 +44,7 @@ func NewNoopSnapshotter() *NoopSnapshotter {
 type BackupFn func(context.Context, *sql.DB, io.Writer) error
 
 type NATSSnapshotter struct {
+	started           bool
 	backupFn          BackupFn
 	objectStore       jetstream.ObjectStore
 	seqProvider       SequenceProvider
@@ -95,6 +96,13 @@ func (s *NATSSnapshotter) Start() {
 	if s.interval <= 0 {
 		return
 	}
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		return
+	}
+	s.started = true
+	s.mu.Unlock()
 	ticker := time.NewTicker(s.interval)
 	for {
 		sequence, err := s.TakeSnapshot(context.Background())

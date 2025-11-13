@@ -33,9 +33,10 @@ func (s *StaticLeader) Ready() chan struct{} {
 }
 
 type DynamicLeader struct {
-	node    *graft.Node
-	readyCh chan struct{}
-	target  string
+	node        *graft.Node
+	readyCh     chan struct{}
+	localTarget string
+	target      string
 }
 
 func (d *DynamicLeader) Ready() chan struct{} {
@@ -43,7 +44,7 @@ func (d *DynamicLeader) Ready() chan struct{} {
 }
 
 func (d *DynamicLeader) IsLeader() bool {
-	return d.node.State() == graft.LEADER
+	return d.node.State() == graft.LEADER && d.target == d.localTarget
 }
 
 func (d *DynamicLeader) RedirectTarget() string {
@@ -101,8 +102,9 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 	}
 
 	dl := DynamicLeader{
-		node:    node,
-		readyCh: make(chan struct{}, 1),
+		node:        node,
+		localTarget: redirectTarget,
+		readyCh:     make(chan struct{}, 1),
 	}
 
 	ticker := time.NewTicker(5 * time.Second)
@@ -126,28 +128,29 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 				redirect, err := kv.Get(ctx, redirectKey)
 				if err != nil {
 					slog.Error("failed to get redirect target", "error", err)
+					dl.setTarget("")
 					continue
 				}
 				dl.setTarget(string(redirect.Value()))
 			case err := <-errChan:
 				slog.Error("leader election", "error", err)
 			case <-ticker.C:
-				if node.State() == graft.LEADER {
-					_, err := kv.PutString(ctx, redirectKey, redirectTarget)
-					if err != nil {
-						slog.Error("leader failed to store redirect target", "error", err)
-						continue
-					}
-					dl.setTarget(redirectTarget)
-				}
 				redirect, err := kv.Get(ctx, redirectKey)
 				if err != nil {
 					slog.Error("failed to get redirect target", "error", err)
+					if errors.Is(err, jetstream.ErrKeyNotFound) && node.State() == graft.LEADER {
+						_, err := kv.PutString(ctx, redirectKey, redirectTarget)
+						if err != nil {
+							slog.Error("leader failed to store redirect target", "error", err)
+							continue
+						}
+						dl.setTarget(redirectTarget)
+						continue
+					}
+					dl.setTarget("")
 					continue
 				}
-				newTarget := string(redirect.Value())
-
-				dl.setTarget(newTarget)
+				dl.setTarget(string(redirect.Value()))
 			case <-ctx.Done():
 				node.Close()
 				return

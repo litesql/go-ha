@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const txCookieName = "_txseq"
+const TXCookieName = "_txseq"
 
 func (c *Connector) ForwardToLeader(timeout time.Duration, methods ...string) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
@@ -30,7 +30,7 @@ func (c *Connector) ForwardToLeaderFunc(h http.HandlerFunc, timeout time.Duratio
 
 		isLeader := c.leaderProvider.IsLeader()
 		if isLeader {
-			h(&responseWriter{w: w, pub: c.publisher}, r)
+			h(c.ResponseWriter(w), r)
 			return
 		}
 
@@ -66,6 +66,13 @@ func (c *Connector) ForwardToLeaderFunc(h http.HandlerFunc, timeout time.Duratio
 	}
 }
 
+func (c *Connector) ResponseWriter(w http.ResponseWriter) http.ResponseWriter {
+	return &responseWriter{
+		w:   w,
+		pub: c.publisher,
+	}
+}
+
 func (c *Connector) ConsistentReader(timeout time.Duration, methods ...string) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(c.ConsistentReaderFunc(h.ServeHTTP, timeout, methods...))
@@ -81,11 +88,11 @@ func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Durati
 		}
 
 		var txSeq uint64
-		if cookie, _ := r.Cookie(txCookieName); cookie != nil {
+		if cookie, _ := r.Cookie(TXCookieName); cookie != nil {
 			var err error
 			txSeq, err = strconv.ParseUint(cookie.Value, 10, 64)
 			if err != nil {
-				slog.Warn("invalid cookie", "name", txCookieName, "error", err)
+				slog.Warn("invalid cookie", "name", TXCookieName, "error", err)
 				h(w, r)
 				return
 			}
@@ -178,7 +185,7 @@ func (rw *responseWriter) Header() http.Header {
 func (rw *responseWriter) Write(b []byte) (int, error) {
 	if rw.statusCode == 0 || (rw.statusCode >= 200 && rw.statusCode < 300) {
 		http.SetCookie(rw.w, &http.Cookie{
-			Name:     txCookieName,
+			Name:     TXCookieName,
 			Value:    fmt.Sprint(rw.pub.Sequence()),
 			Expires:  time.Now().Add(5 * time.Minute),
 			HttpOnly: true,

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -280,6 +281,17 @@ func LookupConnector(dsn string) (*Connector, bool) {
 	defer muConnectors.RUnlock()
 	conn, ok := connectors[key]
 	return conn, ok
+}
+
+func ListDSN() []string {
+	muConnectors.RLock()
+	defer muConnectors.RUnlock()
+	keys := make([]string, 0, len(connectors))
+	for k := range connectors {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 var (

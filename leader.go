@@ -107,8 +107,9 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 		readyCh:     make(chan struct{}, 1),
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	go func() {
+		var retries int
 		for {
 			select {
 			case sc := <-stateChangeChan:
@@ -119,6 +120,7 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 						slog.Error("leader failed to store redirect target", "error", err)
 						continue
 					}
+					retries = 0
 					dl.setTarget(redirectTarget)
 					continue
 				}
@@ -131,25 +133,32 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 					dl.setTarget("")
 					continue
 				}
+				retries = 0
 				dl.setTarget(string(redirect.Value()))
 			case err := <-errChan:
 				slog.Error("leader election", "error", err)
 			case <-ticker.C:
 				redirect, err := kv.Get(ctx, redirectKey)
 				if err != nil {
-					slog.Error("failed to get redirect target", "error", err)
+					retries++
 					if errors.Is(err, jetstream.ErrKeyNotFound) && node.State() == graft.LEADER {
 						_, err := kv.PutString(ctx, redirectKey, redirectTarget)
 						if err != nil {
 							slog.Error("leader failed to store redirect target", "error", err)
 							continue
 						}
+						retries = 0
 						dl.setTarget(redirectTarget)
 						continue
 					}
-					dl.setTarget("")
+					if retries >= 3 {
+						slog.Error("failed to get redirect target", "error", err)
+						dl.setTarget("")
+						retries = 0
+					}
 					continue
 				}
+				retries = 0
 				dl.setTarget(string(redirect.Value()))
 			case <-ctx.Done():
 				node.Close()

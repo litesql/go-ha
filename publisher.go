@@ -125,6 +125,7 @@ func (p *NATSPublisher) Publish(cs *ChangeSet) error {
 	if err != nil {
 		return err
 	}
+	p.sequence = pubAck.Sequence
 	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	return nil
 }

@@ -102,7 +102,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	_, errStats := conn.ExecContext(context.Background(), "REPLACE INTO ha_stats(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
 	if errStats != nil {
-		slog.Error("failed to update ha_stats table", "subject", cs.Subject, "error", errStats)
+		slog.Error("failed to update ha_stats table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
 	}
 	err = tx.Commit()
 	return

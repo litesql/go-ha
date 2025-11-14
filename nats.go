@@ -44,7 +44,7 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 					MaxStreams:   -1,
 					MaxConsumers: -1,
 				},
-			})
+			}, nil)
 			opts.Accounts = []*server.Account{appAcct}
 			opts.Users = []*server.User{
 				{

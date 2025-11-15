@@ -196,6 +196,9 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			}
 		}
 	}
+	if c.publisher == nil {
+		c.publisher = NewNoopPublisher()
+	}
 	if c.autoStart {
 		if c.waitFor == nil {
 			if c.subscriber != nil {

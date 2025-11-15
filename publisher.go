@@ -227,3 +227,15 @@ func (p *AsyncNATSPublisher) relay() {
 		slog.Error("async publisher relay remove from outbox", "error", err)
 	}
 }
+
+type delayedStartPublisher struct {
+	pub CDCPublisher
+}
+
+func (p *delayedStartPublisher) Publish(cs *ChangeSet) error {
+	return nil
+}
+
+func (p *delayedStartPublisher) Sequence() uint64 {
+	return 0
+}

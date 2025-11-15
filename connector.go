@@ -208,8 +208,14 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 				c.snapshotter.Start()
 			}
 		} else {
+			c.publisher = &delayedStartPublisher{
+				pub: c.publisher,
+			}
 			go func() {
 				<-c.waitFor
+				if delayedStartPub, ok := c.publisher.(*delayedStartPublisher); ok {
+					c.publisher = delayedStartPub.pub
+				}
 				if c.subscriber != nil {
 					err := c.subscriber.Start()
 					if err != nil {
@@ -302,6 +308,9 @@ var (
 func (c *Connector) Start(db *sql.DB) error {
 	if c.autoStart {
 		return nil
+	}
+	if delayedStartPub, ok := c.publisher.(*delayedStartPublisher); ok {
+		c.publisher = delayedStartPub.pub
 	}
 	var err error
 	if c.subscriber != nil {

@@ -288,7 +288,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 			"REPLACE INTO ha_stats(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 			s.subject, meta.Sequence.Stream, time.Now().Format(time.RFC3339))
 		if err != nil {
-			slog.Error("failed to update ha_stats table", "subject", s.subject, "seq", meta.Sequence.Stream, "error", err)
+			slog.Debug("failed to update ha_stats table", "subject", s.subject, "seq", meta.Sequence.Stream, "error", err)
 		}
 		s.ack(msg, meta)
 		return

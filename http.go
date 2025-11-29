@@ -68,8 +68,8 @@ func (c *Connector) ForwardToLeaderFunc(h http.HandlerFunc, timeout time.Duratio
 
 func (c *Connector) ResponseWriter(w http.ResponseWriter) http.ResponseWriter {
 	return &responseWriter{
-		w:   w,
-		pub: c.publisher,
+		ResponseWriter: w,
+		pub:            c.publisher,
 	}
 }
 
@@ -173,28 +173,33 @@ func forwardTo(addr string, req *http.Request, timeout time.Duration) (*http.Res
 }
 
 type responseWriter struct {
-	w          http.ResponseWriter
+	http.ResponseWriter
 	pub        CDCPublisher
 	statusCode int
-}
-
-func (rw *responseWriter) Header() http.Header {
-	return rw.w.Header()
+	written    bool
 }
 
 func (rw *responseWriter) Write(b []byte) (int, error) {
-	if rw.statusCode == 0 || (rw.statusCode >= 200 && rw.statusCode < 300) {
-		http.SetCookie(rw.w, &http.Cookie{
-			Name:     TXCookieName,
-			Value:    fmt.Sprint(rw.pub.Sequence()),
-			Expires:  time.Now().Add(5 * time.Minute),
-			HttpOnly: true,
-		})
+	if !rw.written && (rw.statusCode == 0 || (rw.statusCode >= 200 && rw.statusCode < 300)) {
+		rw.setTxCookie()
 	}
-	return rw.w.Write(b)
+	return rw.ResponseWriter.Write(b)
 }
 
 func (rw *responseWriter) WriteHeader(statusCode int) {
 	rw.statusCode = statusCode
-	rw.w.WriteHeader(statusCode)
+	if rw.statusCode >= 200 && rw.statusCode < 300 {
+		rw.setTxCookie()
+	}
+	rw.written = true
+	rw.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (rw *responseWriter) setTxCookie() {
+	http.SetCookie(rw.ResponseWriter, &http.Cookie{
+		Name:     TXCookieName,
+		Value:    fmt.Sprint(rw.pub.Sequence()),
+		Expires:  time.Now().Add(5 * time.Minute),
+		HttpOnly: true,
+	})
 }

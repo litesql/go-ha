@@ -401,13 +401,13 @@ func (c *Connector) Close() {
 		if ok {
 			ncs.count--
 			natsClientServers[c.embeddedNatsConfig] = ncs
-			if ncs.count < 0 {
+			if ncs.count <= 0 {
 				if !ncs.client.IsClosed() {
 					ncs.client.Close()
 				}
-				ncs.server.WaitForShutdown()
+				ncs.server.Shutdown()
+				delete(natsClientServers, c.embeddedNatsConfig)
 			}
-			delete(natsClientServers, c.embeddedNatsConfig)
 		}
 		return
 	}

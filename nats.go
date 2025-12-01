@@ -107,6 +107,7 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 	return &natsClientServer{
 		server: ns,
 		client: nc,
+		count:  1,
 	}, nil
 }
 

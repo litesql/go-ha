@@ -49,7 +49,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		clusterSize:       1,
 		dsn:               dsn,
 		driver:            driver,
-		rowIdentify:       Rowid,
+		rowIdentify:       PK,
 		replicationStream: DefaultStream,
 		publisherTimeout:  15 * time.Second,
 		replicas:          1,
@@ -245,6 +245,7 @@ func Shutdown() {
 type RowIdentify string
 
 const (
+	PK    RowIdentify = "pk"
 	Rowid RowIdentify = "rowid"
 	Full  RowIdentify = "full"
 )

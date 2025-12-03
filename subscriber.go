@@ -123,6 +123,8 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 
 	var applyStrategy applyStrategyFn
 	switch cfg.RowIdentify {
+	case PK:
+		applyStrategy = pkIdentifyStrategy
 	case Rowid:
 		applyStrategy = rowidIdentifyStrategy
 	case Full:
@@ -286,7 +288,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 
 		_, err = conn.ExecContext(context.Background(),
 			"REPLACE INTO ha_stats(subject, received_seq, updated_at) VALUES(?, ?, ?)",
-			s.subject, meta.Sequence.Stream, time.Now().Format(time.RFC3339))
+			s.subject, meta.Sequence.Stream, time.Now().Format(time.RFC3339Nano))
 		if err != nil {
 			slog.Debug("failed to update ha_stats table", "subject", s.subject, "seq", meta.Sequence.Stream, "error", err)
 		}

@@ -219,12 +219,14 @@ func NameToOptions(name string) (string, []Option, error) {
 		case "rowIdentify":
 			var rowIdentify RowIdentify
 			switch value {
+			case string(PK):
+				rowIdentify = PK
 			case string(Rowid):
 				rowIdentify = Rowid
 			case string(Full):
 				rowIdentify = Full
 			default:
-				return "", nil, fmt.Errorf("invalid rowIdentify value. Use rowid or full")
+				return "", nil, fmt.Errorf("invalid rowIdentify value. Use pk, rowid or full")
 			}
 			opts = append(opts, WithRowIdentify(rowIdentify))
 		case "replicationURL":

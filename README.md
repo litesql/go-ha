@@ -39,7 +39,7 @@ Go database/sql base driver providing high availability for SQLite databases.
 | replicationStream       | Name of the replication stream used for synchronizing data.                                    |                 |
 | replicationURL          | URL used for connecting to the replication stream.                                             |                 |
 | replicas                | Number of replicas to maintain for high availability.                                          | 1               |
-| rowIdentify             | Row identify strategy: rowid or full | rowid |
+| rowIdentify             | Row identify strategy: pk, rowid or full | pk |
 | snapshotInterval        | Interval for taking database snapshots.                                                        | 1m              |
 | streamMaxAge            | Maximum age of messages in the replication stream before they are removed.                     |              |
 

@@ -286,3 +286,21 @@ func (c Change) PKOldValues() []any {
 	}
 	return pkValues
 }
+
+func (c Change) PKNewValues() []any {
+	if len(c.PKColumns) == 0 {
+		return []any{c.NewRowID}
+	}
+	pkValues := make([]any, len(c.PKColumns))
+	pkIndex := 0
+	for i, col := range c.Columns {
+		if col == c.PKColumns[pkIndex] {
+			pkValues[pkIndex] = c.NewValues[i]
+			pkIndex++
+			if pkIndex >= len(c.PKColumns) {
+				break
+			}
+		}
+	}
+	return pkValues
+}

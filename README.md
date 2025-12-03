@@ -47,7 +47,8 @@ Go database/sql base driver providing high availability for SQLite databases.
 ## Projects using go-ha
 
 - [HA](https://github.com/litesql/ha): Highly available leaderless SQLite cluster with HTTP and PostgreSQL Wire Protocol
-- [PocketBase HA](https://github.com/litesql/pocketbase-ha): Highly available leaderless PocketBase cluster 
+- [PocketBase HA](https://github.com/litesql/pocketbase-ha): Highly available leaderless PocketBase cluster
+- [sqlc-http](https://github.com/walterwanderley/sqlc-http): Generate net/http go server from SQL
 
 ## Contributing
 

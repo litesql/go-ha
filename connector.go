@@ -406,7 +406,7 @@ func (c *Connector) Close() {
 				if !ncs.client.IsClosed() {
 					ncs.client.Close()
 				}
-				ncs.server.Shutdown()
+				ncs.server.WaitForShutdown()
 				delete(natsClientServers, c.embeddedNatsConfig)
 			}
 		}

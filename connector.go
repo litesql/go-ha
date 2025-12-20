@@ -35,7 +35,7 @@ type ConnHooksProvider interface {
 	EnableHooks(*sql.Conn) error
 }
 
-type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher CDCPublisher) ConnHooksProvider
+type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher Publisher, cdc CDCPublisher) ConnHooksProvider
 
 func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
 	if c, ok := LookupConnector(dsn); ok {
@@ -112,15 +112,15 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		}
 	}
 
-	if c.cdcID == "" {
-		c.cdcID = filenameFromDSN(dsn)
-		if c.cdcID != "" {
-			c.cdcID = filepath.Base(c.cdcID)
+	if c.replicationID == "" {
+		c.replicationID = filenameFromDSN(dsn)
+		if c.replicationID != "" {
+			c.replicationID = filepath.Base(c.replicationID)
 		}
 	}
 	subject := c.replicationStream
-	if c.cdcID != "" {
-		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(c.cdcID))
+	if c.replicationID != "" {
+		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(c.replicationID))
 	}
 
 	if c.leaderElectionLocalTarget != "" {
@@ -148,7 +148,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		if c.asyncPublisher {
 			db := sql.OpenDB(&noHooksConnector{
 				driver: driver,
-				dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(c.cdcID, ".db")+"_outbox.db"),
+				dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(c.replicationID, ".db")+"_outbox.db"),
 			})
 
 			asyncPublisher, err := NewAsyncNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig, db)
@@ -166,13 +166,13 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		}
 	}
 
-	c.connHooksProvider = connHooksFactory(c.name, c.cdcID, c.disableDDLSync, c.publisher)
+	c.connHooksProvider = connHooksFactory(c.name, c.replicationID, c.disableDDLSync, c.publisher, c.cdcPublisher)
 
 	if natsConn != nil {
 		db := sql.OpenDB(&c)
 		c.closers = append(c.closers, db)
 		if c.subscriber == nil {
-			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.cdcID, c.name))
+			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.replicationID, c.name))
 			c.subscriber, err = NewNATSSubscriber(NATSSubscriberConfig{
 				Node:         c.name,
 				Durable:      durable,
@@ -190,7 +190,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 			}
 		}
 		if c.snapshotter == nil {
-			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, c.cdcID)
+			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, c.replicationID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create NATS snapshotter: %w", err)
 			}
@@ -268,16 +268,18 @@ type Connector struct {
 	asyncPublisherOutboxDir string
 	snapshotInterval        time.Duration
 	disableDDLSync          bool
-	cdcID                   string
+	replicationID           string
 	rowIdentify             RowIdentify
 	autoStart               bool
 	clusterSize             int
 	waitFor                 chan struct{}
 
-	publisher   CDCPublisher
-	subscriber  CDCSubscriber
+	publisher   Publisher
+	subscriber  Subscriber
 	interceptor ChangeSetInterceptor
 	snapshotter DBSnapshotter
+
+	cdcPublisher CDCPublisher
 
 	leaderElectionLocalTarget string
 	leaderProvider            LeaderProvider
@@ -336,11 +338,15 @@ func (c *Connector) NodeName() string {
 	return c.name
 }
 
-func (c *Connector) Publisher() CDCPublisher {
+func (c *Connector) Publisher() Publisher {
 	return c.publisher
 }
 
-func (c *Connector) Subscriber() CDCSubscriber {
+func (c *Connector) CDCPublisher() CDCPublisher {
+	return c.cdcPublisher
+}
+
+func (c *Connector) Subscriber() Subscriber {
 	return c.subscriber
 }
 
@@ -506,12 +512,16 @@ func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequenc
 	return sequence, reader, err
 }
 
-type CDCPublisher interface {
+type Publisher interface {
 	Publish(cs *ChangeSet) error
 	Sequence() uint64
 }
 
-type CDCSubscriber interface {
+type CDCPublisher interface {
+	Publish(data []DebeziumData) error
+}
+
+type Subscriber interface {
 	SetDB(*sql.DB)
 	Start() error
 	LatestSeq() uint64

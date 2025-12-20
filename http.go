@@ -174,7 +174,7 @@ func forwardTo(addr string, req *http.Request, timeout time.Duration) (*http.Res
 
 type responseWriter struct {
 	http.ResponseWriter
-	pub        CDCPublisher
+	pub        Publisher
 	statusCode int
 	written    bool
 }

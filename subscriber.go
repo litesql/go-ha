@@ -94,7 +94,7 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 			deliverPolicy = jetstream.DeliverByStartSequencePolicy
 			_, err := fmt.Sscanf(cfg.Policy, "by_start_sequence=%d", &startSeq)
 			if err != nil {
-				return nil, fmt.Errorf("invalid CDC subscriber start sequence: %w", err)
+				return nil, fmt.Errorf("invalid subscriber start sequence: %w", err)
 			}
 			break
 
@@ -108,7 +108,7 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 			dateTime := strings.TrimPrefix(cfg.Policy, "by_start_time=")
 			t, err := time.Parse(time.DateTime, dateTime)
 			if err != nil {
-				return nil, fmt.Errorf("invalid CDC subscriber start time: %w", err)
+				return nil, fmt.Errorf("invalid subscriber start time: %w", err)
 			}
 			startTime = &t
 			break
@@ -206,7 +206,7 @@ func (s *NATSSubscriber) Start() error {
 	s.mu.Unlock()
 	_, err = s.consumer.Consume(s.handler)
 	if err != nil {
-		slog.Error("failed to start CDC consumer", "error", err, "durable", s.durable, "subject", s.subject)
+		slog.Error("failed to start replication consumer", "error", err, "durable", s.durable, "subject", s.subject)
 		return err
 	}
 
@@ -266,7 +266,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	cs.SetInterceptor(s.interceptor)
 	err = json.Unmarshal(msg.Data(), &cs)
 	if err != nil {
-		slog.Error("failed to unmarshal CDC message", "error", err, "stream_seq", cs.StreamSeq)
+		slog.Error("failed to unmarshal replication message", "error", err, "stream_seq", cs.StreamSeq)
 		s.ack(msg, meta)
 		return
 	}
@@ -274,14 +274,14 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		// Ignore changes originated from this process and node itself
 		conn, err := s.db.Conn(context.Background())
 		if err != nil {
-			slog.Error("failed to get db conn to process CDC message", "error", err)
+			slog.Error("failed to get db conn to process replication message", "error", err)
 			return
 		}
 		defer conn.Close()
 
 		err = s.connProvider.DisableHooks(conn)
 		if err != nil {
-			slog.Error("failed to disable hooks on db conn to process CDC message", "error", err)
+			slog.Error("failed to disable hooks on db conn to process replication message", "error", err)
 			return
 		}
 		defer s.connProvider.EnableHooks(conn)
@@ -295,10 +295,10 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		s.ack(msg, meta)
 		return
 	}
-	slog.Debug("received CDC message", "subject", msg.Subject(), "node", cs.Node, "changes", len(cs.Changes), "seq", meta.Sequence.Stream)
+	slog.Debug("received replication message", "subject", msg.Subject(), "node", cs.Node, "changes", len(cs.Changes), "seq", meta.Sequence.Stream)
 	err = cs.Apply(s.db)
 	if err != nil {
-		slog.Error("failed to apply CDC message", "error", err, "stream_seq", cs.StreamSeq)
+		slog.Error("failed to apply replication message", "error", err, "stream_seq", cs.StreamSeq)
 		return
 	}
 	s.ack(msg, meta)

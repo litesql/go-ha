@@ -99,7 +99,7 @@ func NewNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, stre
 	defer cancel()
 
 	if streamConfig != nil {
-		// Create a stream to hold the CDC messages
+		// Create a stream to hold the Replication messages
 		_, err = js.CreateOrUpdateStream(ctx, *streamConfig)
 		if err != nil {
 			return nil, err
@@ -126,7 +126,7 @@ func (p *NATSPublisher) Publish(cs *ChangeSet) error {
 		return err
 	}
 	p.sequence = pubAck.Sequence
-	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
+	slog.Debug("published replication message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	return nil
 }
 
@@ -219,7 +219,7 @@ func (p *AsyncNATSPublisher) relay() {
 		return
 	}
 	p.sequence = pubAck.Sequence
-	slog.Debug("published CDC message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
+	slog.Debug("published replication message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	p.mu.Lock()
 	_, err = p.db.Exec("DELETE FROM ha_outbox WHERE rowid = ?", id)
 	p.mu.Unlock()
@@ -229,7 +229,7 @@ func (p *AsyncNATSPublisher) relay() {
 }
 
 type delayedStartPublisher struct {
-	pub CDCPublisher
+	pub Publisher
 }
 
 func (p *delayedStartPublisher) Publish(cs *ChangeSet) error {

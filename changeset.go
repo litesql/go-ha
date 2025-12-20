@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type ChangeSet struct {
@@ -53,7 +55,7 @@ func (cs *ChangeSet) Clear() {
 	cs.Changes = nil
 }
 
-func (cs *ChangeSet) Send(pub CDCPublisher) error {
+func (cs *ChangeSet) Send(pub Publisher) error {
 	if len(cs.Changes) == 0 || pub == nil {
 		return nil
 	}
@@ -106,6 +108,38 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	}
 	err = tx.Commit()
 	return
+}
+
+func (cs *ChangeSet) DebeziumData() []DebeziumData {
+	var list []DebeziumData
+	transactionID := uuid.New().String()
+	for _, change := range cs.Changes {
+		var data DebeziumData
+		switch change.Operation {
+		case "INSERT":
+			data.Payload.Op = "c"
+			data.Payload.After = change.after()
+		case "UPDATE":
+			data.Payload.Op = "u"
+			data.Payload.Before = change.before()
+			data.Payload.After = change.after()
+		case "DELETE":
+			data.Payload.Op = "d"
+			data.Payload.Before = change.before()
+		default:
+			continue
+		}
+		data.Payload.Source.Version = "0.3.0"
+		data.Payload.Source.Connector = "go-ha-connector"
+		data.Payload.Source.Name = cs.Filename
+		data.Payload.Source.DB = change.Database
+		data.Payload.Source.Table = change.Table
+		data.Payload.Source.TsNs = cs.Timestamp
+		data.Payload.TsNs = change.TsNs
+		data.Transaction.ID = transactionID
+		list = append(list, data)
+	}
+	return list
 }
 
 func fullIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
@@ -243,7 +277,7 @@ func placeholders(n int) string {
 	}
 	var b strings.Builder
 	for i := range n {
-		b.WriteString(fmt.Sprintf("?%d,", i+1))
+		fmt.Fprintf(&b, "?%d,", i+1)
 	}
 	return strings.TrimRight(b.String(), ",")
 }
@@ -260,6 +294,7 @@ type Change struct {
 	NewValues []any    `json:"new_values,omitempty"`
 	Command   string   `json:"command,omitempty"`
 	Args      []any    `json:"args,omitempty"`
+	TsNs      int64    `json:"ts_ns,omitempty"`
 }
 
 func (c Change) PKColumnsNames() []string {
@@ -303,4 +338,56 @@ func (c Change) PKNewValues() []any {
 		}
 	}
 	return pkValues
+}
+
+func (c Change) before() map[string]any {
+	before := make(map[string]any)
+	for i, col := range c.Columns {
+		if i < len(c.OldValues) {
+			before[col] = c.OldValues[i]
+		} else {
+			before[col] = nil
+		}
+	}
+	return before
+}
+
+func (c Change) after() map[string]any {
+	after := make(map[string]any)
+	for i, col := range c.Columns {
+		if i < len(c.NewValues) {
+			after[col] = c.NewValues[i]
+		} else {
+			after[col] = nil
+		}
+	}
+	return after
+}
+
+type DebeziumData struct {
+	Schema      any                 `json:"schema"`
+	Payload     DebeziumPayload     `json:"payload"`
+	Transaction DebeziumTransaction `json:"transaction"`
+}
+
+type DebeziumPayload struct {
+	Before map[string]any `json:"before"`
+	After  map[string]any `json:"after"`
+	Source DebeziumSource `json:"source"`
+	Op     string         `json:"op"`
+	TsNs   int64          `json:"ts_ns"`
+}
+
+type DebeziumSource struct {
+	Version   string `json:"version"`
+	Connector string `json:"connector"`
+	Name      string `json:"name"`
+	ServerID  int64  `json:"server_id"`
+	TsNs      int64  `json:"ts_ns"`
+	DB        string `json:"db"`
+	Table     string `json:"table"`
+}
+
+type DebeziumTransaction struct {
+	ID string `json:"id"`
 }

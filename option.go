@@ -74,19 +74,19 @@ func WithDeliverPolicy(deliverPolicy string) Option {
 	}
 }
 
-func WithCDCID(id string) Option {
+func WithReplicationID(id string) Option {
 	return func(c *Connector) {
-		c.cdcID = id
+		c.replicationID = id
 	}
 }
 
-func WithCDCPublisher(pub CDCPublisher) Option {
+func WithReplicationPublisher(pub Publisher) Option {
 	return func(c *Connector) {
 		c.publisher = pub
 	}
 }
 
-func WithCDCSubscriber(sub CDCSubscriber) Option {
+func WithReplicationSubscriber(sub Subscriber) Option {
 	return func(c *Connector) {
 		c.subscriber = sub
 	}
@@ -182,6 +182,12 @@ func WithClusterSize(size int) Option {
 	}
 }
 
+func WithCDCPublisher(p CDCPublisher) Option {
+	return func(c *Connector) {
+		c.cdcPublisher = p
+	}
+}
+
 func NameToOptions(name string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
@@ -251,8 +257,8 @@ func NameToOptions(name string) (string, []Option, error) {
 			}
 		case "asyncPublisherOutboxDir":
 			opts = append(opts, WithAsyncPublisherOutboxDir(value))
-		case "cdcID":
-			opts = append(opts, WithCDCID(value))
+		case "replID", "replicationID":
+			opts = append(opts, WithReplicationID(value))
 		case "clusterSize":
 			size, err := strconv.Atoi(value)
 			if err != nil {
@@ -301,21 +307,21 @@ func NameToOptions(name string) (string, []Option, error) {
 			if disable {
 				opts = append(opts, WithDisableDDLSync())
 			}
-		case "disableCDCPublisher":
+		case "disablePublisher":
 			disable, err := strconv.ParseBool(value)
 			if err != nil {
-				return "", nil, fmt.Errorf("invalid disableCDCPublisher: %w", err)
+				return "", nil, fmt.Errorf("invalid disablePublisher: %w", err)
 			}
 			if disable {
-				opts = append(opts, WithCDCPublisher(NewNoopPublisher()))
+				opts = append(opts, WithReplicationPublisher(NewNoopPublisher()))
 			}
-		case "disableCDCSubscriber":
+		case "disableSubscriber":
 			disable, err := strconv.ParseBool(value)
 			if err != nil {
-				return "", nil, fmt.Errorf("invalid disableCDCSubscriber: %w", err)
+				return "", nil, fmt.Errorf("invalid disableSubscriber: %w", err)
 			}
 			if disable {
-				opts = append(opts, WithCDCSubscriber(NewNoopSubscriber()))
+				opts = append(opts, WithReplicationSubscriber(NewNoopSubscriber()))
 			}
 		case "disableDBSnapshotter":
 			disable, err := strconv.ParseBool(value)

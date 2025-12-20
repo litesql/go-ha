@@ -48,6 +48,7 @@ func (cs *ChangeSet) SetConnProvider(connProvider ConnHooksProvider) {
 }
 
 func (cs *ChangeSet) AddChange(change Change) {
+	change.TsNs = time.Now().UnixNano()
 	cs.Changes = append(cs.Changes, change)
 }
 

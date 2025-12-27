@@ -23,7 +23,7 @@ type ConnectorProvider func(dbName string) (driver.Connector, bool)
 type Databases func() []string
 
 func (h *Handler) UseDB(dbName string) error {
-	slog.Info("Received: UseDB", "dbname", dbName)
+	slog.Debug("Received: UseDB", "dbname", dbName)
 	conn, ok := h.cp(dbName)
 	if ok {
 		if h.db != nil {
@@ -35,13 +35,13 @@ func (h *Handler) UseDB(dbName string) error {
 	return nil
 }
 
-var commentsRE = regexp.MustCompile("(?s)//.*?\\n|/\\*.*?\\*/")
+var commentsRE = regexp.MustCompile(`(?s)//.*?\\n|/\\*.*?\\*/`)
 
 func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
+	slog.Debug("Received: Query", "query", query)
 	cleanQuery := commentsRE.ReplaceAllString(query, "")
 	cleanQuery = strings.TrimSpace(cleanQuery)
-	// These two queries are implemented for minimal support for MySQL Shell
-	slog.Info("Received: Query", "query", query, "clean", cleanQuery)
+	// These queries are implemented for minimal support for MySQL Shell
 	if len(cleanQuery) > 4 && strings.HasPrefix(strings.ToUpper(cleanQuery[0:4]), "SET ") {
 		return mysql.NewResultReserveResultset(0), nil
 	}
@@ -174,7 +174,7 @@ func (h *Handler) HandleFieldList(table string, fieldWildcard string) ([]*mysql.
 }
 
 func (h *Handler) HandleStmtPrepare(query string) (int, int, any, error) {
-	slog.Info("Received: StmtPrepare", "query", query)
+	slog.Debug("Received: StmtPrepare", "query", query)
 	if h.db == nil {
 		return 0, 0, nil, fmt.Errorf("no database selected")
 	}

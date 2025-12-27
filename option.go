@@ -188,6 +188,12 @@ func WithCDCPublisher(p CDCPublisher) Option {
 	}
 }
 
+func WithMySQLPort(port int) Option {
+	return func(c *Connector) {
+		c.mysqlPort = port
+	}
+}
+
 func NameToOptions(name string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
@@ -331,6 +337,12 @@ func NameToOptions(name string) (string, []Option, error) {
 			if disable {
 				opts = append(opts, WithDBSnapshotter(NewNoopSnapshotter()))
 			}
+		case "mysqlPort":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid mysqlPort: %w", err)
+			}
+			opts = append(opts, WithMySQLPort(port))
 		case "leaderProvider":
 			typ, target, ok := strings.Cut(value, ":")
 			if !ok {

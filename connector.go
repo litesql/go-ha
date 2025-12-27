@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/litesql/go-ha/wire"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -26,6 +27,7 @@ const DefaultStream = "ha_replication"
 var (
 	connectors        = make(map[string]*Connector)
 	natsClientServers = make(map[*EmbeddedNatsConfig]*natsClientServer)
+	mysqlServers      = make(map[int]*wire.Server)
 	muConnectors      sync.RWMutex
 )
 
@@ -37,7 +39,7 @@ type ConnHooksProvider interface {
 
 type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher Publisher, cdc CDCPublisher) ConnHooksProvider
 
-func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
+func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
 	if c, ok := LookupConnector(dsn); ok {
 		return c, nil
 	}
@@ -48,7 +50,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 	c := Connector{
 		clusterSize:       1,
 		dsn:               dsn,
-		driver:            driver,
+		driver:            drv,
 		rowIdentify:       PK,
 		replicationStream: DefaultStream,
 		publisherTimeout:  15 * time.Second,
@@ -147,7 +149,7 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		}
 		if c.asyncPublisher {
 			db := sql.OpenDB(&noHooksConnector{
-				driver: driver,
+				driver: drv,
 				dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(c.replicationID, ".db")+"_outbox.db"),
 			})
 
@@ -232,6 +234,25 @@ func NewConnector(dsn string, driver driver.Driver, connHooksFactory ConnHooksFa
 		}
 	}
 
+	if c.mysqlPort > 0 {
+		if _, ok := mysqlServers[c.mysqlPort]; !ok {
+			mysqlServer := &wire.Server{
+				ConnectorProvider: func(dbName string) (driver.Connector, bool) {
+					return LookupConnector(dbName)
+				},
+				Databases: ListDSN,
+				Port:      c.mysqlPort,
+			}
+			err := mysqlServer.ListenAndServe()
+			if err != nil {
+				return nil, fmt.Errorf("failed to start MySQL server on port %d: %w", c.mysqlPort, err)
+			}
+			mysqlServers[c.mysqlPort] = mysqlServer
+		} else {
+			mysqlServers[c.mysqlPort].ReferenceCount++
+		}
+	}
+
 	connectors[dsn] = &c
 	return &c, nil
 }
@@ -272,6 +293,7 @@ type Connector struct {
 	rowIdentify             RowIdentify
 	autoStart               bool
 	clusterSize             int
+	mysqlPort               int
 	waitFor                 chan struct{}
 
 	publisher   Publisher
@@ -417,6 +439,16 @@ func (c *Connector) Close() {
 			}
 		}
 		return
+	}
+
+	if c.mysqlPort > 0 {
+		if server, ok := mysqlServers[c.mysqlPort]; ok {
+			server.ReferenceCount--
+			if server.ReferenceCount <= 0 {
+				server.Close()
+				delete(mysqlServers, c.mysqlPort)
+			}
+		}
 	}
 }
 

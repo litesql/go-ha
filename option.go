@@ -194,6 +194,18 @@ func WithMySQLPort(port int) Option {
 	}
 }
 
+func WithMySQLUser(user string) Option {
+	return func(c *Connector) {
+		c.mysqlUser = user
+	}
+}
+
+func WithMySQLPass(pass string) Option {
+	return func(c *Connector) {
+		c.mysqlPass = pass
+	}
+}
+
 func NameToOptions(name string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
@@ -343,6 +355,10 @@ func NameToOptions(name string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid mysqlPort: %w", err)
 			}
 			opts = append(opts, WithMySQLPort(port))
+		case "mysqlUser":
+			opts = append(opts, WithMySQLUser(value))
+		case "mysqlPass":
+			opts = append(opts, WithMySQLPass(value))
 		case "leaderProvider":
 			typ, target, ok := strings.Cut(value, ":")
 			if !ok {

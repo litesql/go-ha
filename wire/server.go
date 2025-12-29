@@ -12,6 +12,8 @@ type Server struct {
 	ConnectorProvider ConnectorProvider
 	Databases         Databases
 	Port              int
+	User              string
+	Pass              string
 	listener          net.Listener
 	closed            bool
 	ReferenceCount    int
@@ -41,7 +43,7 @@ func (s *Server) ListenAndServe() error {
 				defer c.Close()
 
 				slog.Debug("New mysql connection", "remote", c.RemoteAddr().String())
-				conn, err := mysqlServer.NewConn(c, "root", "", &Handler{
+				conn, err := mysqlServer.NewConn(c, s.User, s.Pass, &Handler{
 					cp:   s.ConnectorProvider,
 					list: s.Databases,
 				})

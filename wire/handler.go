@@ -36,9 +36,7 @@ func (h *Handler) UseDB(dbName string) error {
 }
 
 var (
-	commentsRE          = regexp.MustCompile(`(?s)//.*?\\n|/\\*.*?\\*/`)
-	informationSchemaRE = regexp.MustCompile(`(?i)\binformation_schema\.[A-Za-z0-9_]+`)
-	tableSchemaRE       = regexp.MustCompile(`(?i)\bTABLE_SCHEMA\s*=\s*'[^']*'`)
+	commentsRE = regexp.MustCompile(`(?s)//.*?\\n|/\\*.*?\\*/`)
 )
 
 func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
@@ -156,35 +154,6 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 	}
 
 	if isSelect(cleanQuery) {
-		if strings.Contains(cleanQuery, "information_schema.") {
-			query = informationSchemaRE.ReplaceAllString(query, "[$0]")
-
-			dbName := strings.TrimSpace(strings.TrimPrefix(tableSchemaRE.FindString(query), "TABLE_SCHEMA"))
-			dbName = strings.TrimSpace(strings.TrimPrefix(dbName, "="))
-			dbName = strings.TrimPrefix(dbName, "'")
-			dbName = strings.TrimSuffix(dbName, "'")
-
-			query = tableSchemaRE.ReplaceAllString(query, "1 = 1")
-			if dbName != "" {
-				conn, ok := h.cp(dbName)
-				if ok {
-					db := sql.OpenDB(conn)
-					defer db.Close()
-					rows, err := db.Query(query)
-					if err != nil {
-						slog.Error("Query error", "error", err)
-						return nil, err
-					}
-					resultSet, err := rowsToResultset(rows, false)
-					if err != nil {
-						slog.Error("rowsToResultset error", "error", err)
-						return nil, err
-					}
-					return mysql.NewResult(resultSet), nil
-				}
-			}
-		}
-
 		rows, err := h.query(query)
 		if err != nil {
 			slog.Error("Query error", "error", err)

@@ -57,6 +57,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		replicas:          1,
 		leaderProvider:    &StaticLeader{},
 		autoStart:         true,
+		mysqlUser:         "root",
 		natsOptions: []nats.Option{
 			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 				if err != nil {
@@ -242,6 +243,8 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 				},
 				Databases: ListDSN,
 				Port:      c.mysqlPort,
+				User:      c.mysqlUser,
+				Pass:      c.mysqlPass,
 			}
 			err := mysqlServer.ListenAndServe()
 			if err != nil {
@@ -293,7 +296,6 @@ type Connector struct {
 	rowIdentify             RowIdentify
 	autoStart               bool
 	clusterSize             int
-	mysqlPort               int
 	waitFor                 chan struct{}
 
 	publisher   Publisher
@@ -305,6 +307,10 @@ type Connector struct {
 
 	leaderElectionLocalTarget string
 	leaderProvider            LeaderProvider
+
+	mysqlPort int
+	mysqlUser string
+	mysqlPass string
 
 	closers []io.Closer
 }

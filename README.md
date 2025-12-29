@@ -31,6 +31,8 @@ Go database/sql base driver providing high availability for SQLite databases.
 | disableDDLSync          | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
 | leaderProvider            | Defines the strategy for determining a leader node in the cluster. This is useful for redirecting HTTP requests. Examples include `dynamic:http://host:port` or `static:http://host:port`.   |       |
 | mysqlPort               | TCP port for the MySQL protocol-compatible server.                                 |                 |
+| mysqlUser               | User for the MySQL protocol-compatible server.                                 |                 |
+| mysqlPass               | Password for the MySQL protocol-compatible server.                                 |                 |
 | name                    | Name of the node in the cluster.                                                   |                 |
 | natsConfigFile          | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |
 | natsName                | Sets the name of the embedded NATS server.                                                     |                 |

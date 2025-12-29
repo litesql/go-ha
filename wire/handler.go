@@ -35,7 +35,11 @@ func (h *Handler) UseDB(dbName string) error {
 	return nil
 }
 
-var commentsRE = regexp.MustCompile(`(?s)//.*?\\n|/\\*.*?\\*/`)
+var (
+	commentsRE          = regexp.MustCompile(`(?s)//.*?\\n|/\\*.*?\\*/`)
+	informationSchemaRE = regexp.MustCompile(`(?i)\binformation_schema\.[A-Za-z0-9_]+`)
+	tableSchemaRE       = regexp.MustCompile(`(?i)\bTABLE_SCHEMA\s*=\s*'[^']*'`)
+)
 
 func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 	slog.Debug("Received: Query", "query", query)
@@ -56,7 +60,7 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 	}
 
 	if strings.HasPrefix(cleanQuery, "use ") {
-		dbName := strings.ReplaceAll(strings.TrimSpace(cleanQuery[4:]), "`", "")
+		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(query, "use ")+4:]), "`", "")
 		return nil, h.UseDB(dbName)
 	}
 
@@ -85,7 +89,7 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 	}
 
 	if strings.HasPrefix(cleanQuery, "SHOW FULL TABLES FROM ") {
-		dbName := strings.ReplaceAll(strings.TrimSpace(cleanQuery[22:]), "`", "")
+		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(query, "SHOW FULL TABLES FROM ")+22:]), "`", "")
 		conn, ok := h.cp(dbName)
 		if !ok {
 			return nil, fmt.Errorf("database %q not found", dbName)
@@ -93,6 +97,27 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 		db := sql.OpenDB(conn)
 		defer db.Close()
 		rows, err := db.Query("SELECT name as tables, 'BASE TABLE' as Table_type FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+		if err != nil {
+			slog.Error("Query error", "error", err)
+			return nil, err
+		}
+		resultSet, err := rowsToResultset(rows, false)
+		if err != nil {
+			slog.Error("rowsToResultset error", "error", err)
+			return nil, err
+		}
+		return mysql.NewResult(resultSet), nil
+	}
+
+	if strings.HasPrefix(cleanQuery, "SHOW TABLE STATUS FROM ") {
+		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(query, "SHOW TABLE STATUS FROM ")+23:]), "`", "")
+		conn, ok := h.cp(dbName)
+		if !ok {
+			return nil, fmt.Errorf("database %q not found", dbName)
+		}
+		db := sql.OpenDB(conn)
+		defer db.Close()
+		rows, err := db.Query("SELECT name as Name, 'BASE TABLE' as Type, 'SQLite' as Engine, 10 as Version, '' as Row_format, 0 as Rows, 0 as Avg_row_length, 0 as Data_length, 0 as Max_data_length, 0 as Index_length, 0 as Data_free, 0 as Auto_increment, '' as Create_time, '' as Update_time, '' as Check_time, '' as Collation, '' as Comment FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
 		if err != nil {
 			slog.Error("Query error", "error", err)
 			return nil, err
@@ -131,7 +156,36 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 	}
 
 	if isSelect(cleanQuery) {
-		rows, err := h.query(cleanQuery)
+		if strings.Contains(cleanQuery, "information_schema.") {
+			query = informationSchemaRE.ReplaceAllString(query, "[$0]")
+
+			dbName := strings.TrimSpace(strings.TrimPrefix(tableSchemaRE.FindString(query), "TABLE_SCHEMA"))
+			dbName = strings.TrimSpace(strings.TrimPrefix(dbName, "="))
+			dbName = strings.TrimPrefix(dbName, "'")
+			dbName = strings.TrimSuffix(dbName, "'")
+
+			query = tableSchemaRE.ReplaceAllString(query, "1 = 1")
+			if dbName != "" {
+				conn, ok := h.cp(dbName)
+				if ok {
+					db := sql.OpenDB(conn)
+					defer db.Close()
+					rows, err := db.Query(query)
+					if err != nil {
+						slog.Error("Query error", "error", err)
+						return nil, err
+					}
+					resultSet, err := rowsToResultset(rows, false)
+					if err != nil {
+						slog.Error("rowsToResultset error", "error", err)
+						return nil, err
+					}
+					return mysql.NewResult(resultSet), nil
+				}
+			}
+		}
+
+		rows, err := h.query(query)
 		if err != nil {
 			slog.Error("Query error", "error", err)
 			return nil, err
@@ -144,7 +198,7 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 		return mysql.NewResult(resultSet), nil
 	}
 
-	res, err := h.exec(cleanQuery)
+	res, err := h.exec(query)
 	if err != nil {
 		slog.Error("Exec error", "error", err)
 		return nil, err

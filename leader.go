@@ -114,7 +114,7 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 			select {
 			case sc := <-stateChangeChan:
 				if sc.To == graft.LEADER {
-					slog.Info("i am the leader")
+					slog.Debug("i am the leader")
 					_, err := kv.PutString(ctx, redirectKey, redirectTarget)
 					if err != nil {
 						slog.Error("leader failed to store redirect target", "error", err)
@@ -125,7 +125,7 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 					continue
 				}
 				if sc.From == graft.LEADER {
-					slog.Info("i am not the leader anymore")
+					slog.Debug("i am not the leader anymore")
 				}
 				redirect, err := kv.Get(ctx, redirectKey)
 				if err != nil {

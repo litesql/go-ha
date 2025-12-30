@@ -10,6 +10,7 @@ Go database/sql base driver providing high availability for SQLite databases.
 - Leaderless clusters: Read/Write from/to any node. **Last-writer wins** by default, but you can customize conflict resolutions by implementing *ChangeSetInterceptor*.
 - Embedded or External NATS: Choose between an embedded NATS server or an external one for replication.
 - Easy to integrate with existing Go projects.
+- Built-in MySQL protocol server for broader compatibility.
 
 ## Drivers
 
@@ -31,7 +32,7 @@ Go database/sql base driver providing high availability for SQLite databases.
 | disableDDLSync          | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
 | leaderProvider            | Defines the strategy for determining a leader node in the cluster. This is useful for redirecting HTTP requests. Examples include `dynamic:http://host:port` or `static:http://host:port`.   |       |
 | mysqlPort               | TCP port for the MySQL protocol-compatible server.                                 |                 |
-| mysqlUser               | User for the MySQL protocol-compatible server.                                 |                 |
+| mysqlUser               | User for the MySQL protocol-compatible server.                                 | root            |
 | mysqlPass               | Password for the MySQL protocol-compatible server.                                 |                 |
 | name                    | Name of the node in the cluster.                                                   |                 |
 | natsConfigFile          | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |

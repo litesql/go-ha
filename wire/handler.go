@@ -36,13 +36,15 @@ func (h *Handler) UseDB(dbName string) error {
 }
 
 var (
-	commentsRE = regexp.MustCompile(`(?s)//.*?\\n|/\\*.*?\\*/`)
+	commentsRE    = regexp.MustCompile(`(?s)//.*?\\n|/\\*.*?\\*/`)
+	tableSchemaRE = regexp.MustCompile(`(?i)\bTABLE_SCHEMA\s*=\s*'[^']*'`)
+	tableNameRE   = regexp.MustCompile(`(?i)\bTABLE_NAME\s*=\s*'[^']*'`)
 )
 
 func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 	slog.Debug("Received: Query", "query", query)
 	cleanQuery := commentsRE.ReplaceAllString(query, "")
-	cleanQuery = strings.TrimSpace(cleanQuery)
+	cleanQuery = strings.ToUpper(strings.TrimSpace(cleanQuery))
 	// These queries are implemented for minimal support for MySQL Shell
 	if len(cleanQuery) > 4 && strings.HasPrefix(strings.ToUpper(cleanQuery[0:4]), "SET ") {
 		return mysql.NewResultReserveResultset(0), nil
@@ -57,7 +59,7 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 		return mysql.NewResult(r), nil
 	}
 
-	if strings.HasPrefix(cleanQuery, "use ") {
+	if strings.HasPrefix(cleanQuery, "USE ") {
 		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(query, "use ")+4:]), "`", "")
 		return nil, h.UseDB(dbName)
 	}
@@ -72,7 +74,7 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 		return mysql.NewResult(resultSet), nil
 	}
 
-	if strings.HasSuffix(cleanQuery, "show databases") {
+	if cleanQuery == "SHOW DATABASES" {
 		dbs := h.list()
 		vals := make([][]any, 0, len(dbs))
 		for _, db := range dbs {
@@ -80,14 +82,14 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 		}
 		resultSet, err := mysql.BuildSimpleResultset([]string{"Database"}, vals, false)
 		if err != nil {
-			slog.Error("BuildSimpleResultset error", "error", err)
+			slog.Debug("BuildSimpleResultset error", "error", err)
 			return nil, err
 		}
 		return mysql.NewResult(resultSet), nil
 	}
 
 	if strings.HasPrefix(cleanQuery, "SHOW FULL TABLES FROM ") {
-		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(query, "SHOW FULL TABLES FROM ")+22:]), "`", "")
+		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(strings.ToUpper(query), "SHOW FULL TABLES FROM ")+22:]), "`", "")
 		conn, ok := h.cp(dbName)
 		if !ok {
 			return nil, fmt.Errorf("database %q not found", dbName)
@@ -96,19 +98,19 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 		defer db.Close()
 		rows, err := db.Query("SELECT name as tables, 'BASE TABLE' as Table_type FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
 		if err != nil {
-			slog.Error("Query error", "error", err)
+			slog.Debug("Query error", "error", err)
 			return nil, err
 		}
 		resultSet, err := rowsToResultset(rows, false)
 		if err != nil {
-			slog.Error("rowsToResultset error", "error", err)
+			slog.Debug("rowsToResultset error", "error", err)
 			return nil, err
 		}
 		return mysql.NewResult(resultSet), nil
 	}
 
 	if strings.HasPrefix(cleanQuery, "SHOW TABLE STATUS FROM ") {
-		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(query, "SHOW TABLE STATUS FROM ")+23:]), "`", "")
+		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(strings.ToUpper(query), "SHOW TABLE STATUS FROM ")+23:]), "`", "")
 		conn, ok := h.cp(dbName)
 		if !ok {
 			return nil, fmt.Errorf("database %q not found", dbName)
@@ -117,51 +119,84 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 		defer db.Close()
 		rows, err := db.Query("SELECT name as Name, 'BASE TABLE' as Type, 'SQLite' as Engine, 10 as Version, '' as Row_format, 0 as Rows, 0 as Avg_row_length, 0 as Data_length, 0 as Max_data_length, 0 as Index_length, 0 as Data_free, 0 as Auto_increment, '' as Create_time, '' as Update_time, '' as Check_time, '' as Collation, '' as Comment FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
 		if err != nil {
-			slog.Error("Query error", "error", err)
+			slog.Debug("Query error", "error", err)
 			return nil, err
 		}
 		resultSet, err := rowsToResultset(rows, false)
 		if err != nil {
-			slog.Error("rowsToResultset error", "error", err)
+			slog.Debug("rowsToResultset error", "error", err)
 			return nil, err
 		}
 		return mysql.NewResult(resultSet), nil
 	}
 
-	if cleanQuery == "show tables" {
+	if cleanQuery == "SHOW TABLES" {
 		rows, err := h.query("SELECT name as tables FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
 		if err != nil {
-			slog.Error("Query error", "error", err)
+			slog.Debug("Query error", "error", err)
 			return nil, err
 		}
 		resultSet, err := rowsToResultset(rows, false)
 		if err != nil {
-			slog.Error("rowsToResultset error", "error", err)
+			slog.Debug("rowsToResultset error", "error", err)
 			return nil, err
 		}
 		return mysql.NewResult(resultSet), nil
 	}
 
-	if cleanQuery == "SELECT @@session.transaction_read_only" {
+	if cleanQuery == "SELECT @@SESSION.TRANSACTION_READ_ONLY" {
 		resultSet, err := mysql.BuildSimpleResultset([]string{"@@session.transaction_read_only"}, [][]any{
 			{0},
 		}, false)
 		if err != nil {
-			slog.Error("BuildSimpleResultset error", "error", err)
+			slog.Debug("BuildSimpleResultset error", "error", err)
 			return nil, err
 		}
 		return mysql.NewResult(resultSet), nil
 	}
 
 	if isSelect(cleanQuery) {
+		if strings.Contains(cleanQuery, "INFORMATION_SCHEMA.") {
+			dbName := strings.TrimSpace(strings.TrimPrefix(tableSchemaRE.FindString(query), "TABLE_SCHEMA"))
+			dbName = strings.TrimSpace(strings.TrimPrefix(dbName, "="))
+			dbName = strings.TrimPrefix(dbName, "'")
+			dbName = strings.TrimSuffix(dbName, "'")
+
+			tableName := strings.TrimSpace(strings.TrimPrefix(tableNameRE.FindString(query), "TABLE_NAME"))
+			tableName = strings.TrimSpace(strings.TrimPrefix(tableName, "="))
+			tableName = strings.TrimPrefix(tableName, "'")
+			tableName = strings.TrimSuffix(tableName, "'")
+
+			if dbName != "" {
+				conn, ok := h.cp(dbName)
+				db := sql.OpenDB(conn)
+				defer db.Close()
+				if ok {
+					if strings.HasPrefix(cleanQuery, "SELECT * FROM INFORMATION_SCHEMA.COLUMNS ") {
+						rows, err := db.Query("SELECT 'def' AS table_catalog, '"+dbName+"' AS table_schema, '"+tableName+"' AS table_name , name AS column_name, cid + 1 AS ordinal_position, dflt_value AS column_default, CASE WHEN [notnull] = 1 THEN 'NO' ELSE 'YES' END AS is_nullable, type AS data_type, null AS character_maximum_length, null AS character_octet_length, null AS numeric_precision, null AS numeric_scale, null AS datetime_precision, 'utf8mb4' AS character_set_name, 'utf8mb4_general_ci' AS collation_name, type AS column_type, CASE WHEN pk = 1 THEN 'PRI' ELSE '' END AS column_key, '' AS extra, 'select,insert,update,references' AS privileges, '' AS column_comment, '' AS generation_expression, null AS srs_id FROM PRAGMA_table_info(?) ORDER BY cid", tableName)
+						if err != nil {
+							slog.Debug("Query error", "error", err)
+							return nil, err
+						}
+						resultSet, err := rowsToResultset(rows, false)
+						if err != nil {
+							slog.Debug("rowsToResultset error", "error", err)
+							return nil, err
+						}
+						return mysql.NewResult(resultSet), nil
+					}
+				}
+			}
+		}
+
 		rows, err := h.query(query)
 		if err != nil {
-			slog.Error("Query error", "error", err)
+			slog.Debug("Query error", "error", err)
 			return nil, err
 		}
 		resultSet, err := rowsToResultset(rows, false)
 		if err != nil {
-			slog.Error("rowsToResultset error", "error", err)
+			slog.Debug("rowsToResultset error", "error", err)
 			return nil, err
 		}
 		return mysql.NewResult(resultSet), nil
@@ -169,17 +204,17 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 
 	res, err := h.exec(query)
 	if err != nil {
-		slog.Error("Exec error", "error", err)
+		slog.Debug("Exec error", "error", err)
 		return nil, err
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
-		slog.Error("RowsAffected error", "error", err)
+		slog.Debug("RowsAffected error", "error", err)
 		return nil, err
 	}
 	lastInsertID, err := res.LastInsertId()
 	if err != nil {
-		slog.Error("LastInsertId error", "error", err)
+		slog.Debug("LastInsertId error", "error", err)
 		return nil, err
 	}
 	result := mysql.NewResultReserveResultset(0)

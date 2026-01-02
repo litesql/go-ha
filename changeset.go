@@ -130,7 +130,7 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 		default:
 			continue
 		}
-		data.Payload.Source.Version = "0.3.0"
+		data.Payload.Source.Version = "0.4.0"
 		data.Payload.Source.Connector = "go-ha-connector"
 		data.Payload.Source.Name = cs.Filename
 		data.Payload.Source.DB = change.Database

@@ -250,7 +250,11 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			s := grpc.NewServer()
 			sqlv1.RegisterDatabaseServiceServer(s, &hagrpc.Service{
 				DBProvider: func(dsn string) (hagrpc.HADB, bool) {
-					return nil, false
+					connector, ok := LookupConnector(dsn)
+					if !ok {
+						return nil, false
+					}
+					return connector, true
 				},
 			})
 			slog.Info("gRPC server listening", "addr", lis.Addr())
@@ -424,7 +428,7 @@ func (c *Connector) Snapshotter() DBSnapshotter {
 }
 
 func (c *Connector) DB() *sql.DB {
-	return c.DB()
+	return c.db
 }
 
 func (c *Connector) DeliveredInfo(ctx context.Context, name string) (any, error) {

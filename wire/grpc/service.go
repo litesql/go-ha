@@ -168,7 +168,7 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 			args := make([]any, len(params))
 			for i, param := range params {
 				if param.Name != "" {
-					args[i] = sql.Named(param.Name, fromAnypb(param.Value))
+					args[i] = sql.Named(param.Name, FromAnypb(param.Value))
 				}
 			}
 
@@ -261,7 +261,7 @@ func query(ctx context.Context, ex execQuerier, query string, args ...any) *sqlv
 				row[i] = nil
 				continue
 			}
-			row[i], err = toAnypb(*c.(*any))
+			row[i], err = ToAnypb(*c.(*any))
 			if err != nil {
 				return &sqlv1.QueryResponse{
 					Error: err.Error(),

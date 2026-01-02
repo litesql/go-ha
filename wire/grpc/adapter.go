@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-func fromAnypb(p *anypb.Any) any {
+func FromAnypb(p *anypb.Any) any {
 	if p == nil {
 		return nil
 	}
@@ -89,7 +89,7 @@ func fromAnypb(p *anypb.Any) any {
 	}
 }
 
-func toAnypb(val any) (*anypb.Any, error) {
+func ToAnypb(val any) (*anypb.Any, error) {
 	var m proto.Message
 	switch v := val.(type) {
 	case *any:

@@ -188,6 +188,12 @@ func WithCDCPublisher(p CDCPublisher) Option {
 	}
 }
 
+func WithGrpcPort(port int) Option {
+	return func(c *Connector) {
+		c.grpcPort = port
+	}
+}
+
 func WithMySQLPort(port int) Option {
 	return func(c *Connector) {
 		c.mysqlPort = port
@@ -349,6 +355,12 @@ func NameToOptions(name string) (string, []Option, error) {
 			if disable {
 				opts = append(opts, WithDBSnapshotter(NewNoopSnapshotter()))
 			}
+		case "grpcPort":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid grpcPort: %w", err)
+			}
+			opts = append(opts, WithGrpcPort(port))
 		case "mysqlPort":
 			port, err := strconv.Atoi(value)
 			if err != nil {

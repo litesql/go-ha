@@ -1,4 +1,4 @@
-package wire
+package mysql
 
 import (
 	"fmt"
@@ -9,14 +9,14 @@ import (
 )
 
 type Server struct {
-	ConnectorProvider ConnectorProvider
-	Databases         Databases
-	Port              int
-	User              string
-	Pass              string
-	listener          net.Listener
-	closed            bool
-	ReferenceCount    int
+	DBProvider     DBProvider
+	Databases      Databases
+	Port           int
+	User           string
+	Pass           string
+	listener       net.Listener
+	closed         bool
+	ReferenceCount int
 }
 
 func (s *Server) ListenAndServe() error {
@@ -44,8 +44,8 @@ func (s *Server) ListenAndServe() error {
 
 				slog.Debug("New mysql connection", "remote", c.RemoteAddr().String())
 				conn, err := mysqlServer.NewConn(c, s.User, s.Pass, &Handler{
-					cp:   s.ConnectorProvider,
-					list: s.Databases,
+					provider: s.DBProvider,
+					list:     s.Databases,
 				})
 				if err != nil {
 					slog.Error("New conn", "error", err)

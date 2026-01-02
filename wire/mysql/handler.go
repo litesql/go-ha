@@ -1,8 +1,7 @@
-package wire
+package mysql
 
 import (
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -12,24 +11,21 @@ import (
 )
 
 type Handler struct {
-	db   *sql.DB
-	tx   *sql.Tx
-	cp   ConnectorProvider
-	list Databases
+	db       *sql.DB
+	tx       *sql.Tx
+	provider DBProvider
+	list     Databases
 }
 
-type ConnectorProvider func(dbName string) (driver.Connector, bool)
+type DBProvider func(dbName string) (*sql.DB, bool)
 
 type Databases func() []string
 
 func (h *Handler) UseDB(dbName string) error {
 	slog.Debug("Received: UseDB", "dbname", dbName)
-	conn, ok := h.cp(dbName)
+	db, ok := h.provider(dbName)
 	if ok {
-		if h.db != nil {
-			h.db.Close()
-		}
-		h.db = sql.OpenDB(conn)
+		h.db = db
 	}
 
 	return nil
@@ -90,12 +86,10 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 
 	if strings.HasPrefix(cleanQuery, "SHOW FULL TABLES FROM ") {
 		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(strings.ToUpper(query), "SHOW FULL TABLES FROM ")+22:]), "`", "")
-		conn, ok := h.cp(dbName)
+		db, ok := h.provider(dbName)
 		if !ok {
 			return nil, fmt.Errorf("database %q not found", dbName)
 		}
-		db := sql.OpenDB(conn)
-		defer db.Close()
 		rows, err := db.Query("SELECT name as tables, 'BASE TABLE' as Table_type FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
 		if err != nil {
 			slog.Debug("Query error", "error", err)
@@ -111,12 +105,10 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 
 	if strings.HasPrefix(cleanQuery, "SHOW TABLE STATUS FROM ") {
 		dbName := strings.ReplaceAll(strings.TrimSpace(query[strings.Index(strings.ToUpper(query), "SHOW TABLE STATUS FROM ")+23:]), "`", "")
-		conn, ok := h.cp(dbName)
+		db, ok := h.provider(dbName)
 		if !ok {
 			return nil, fmt.Errorf("database %q not found", dbName)
 		}
-		db := sql.OpenDB(conn)
-		defer db.Close()
 		rows, err := db.Query("SELECT name as Name, 'BASE TABLE' as Type, 'SQLite' as Engine, 10 as Version, '' as Row_format, 0 as Rows, 0 as Avg_row_length, 0 as Data_length, 0 as Max_data_length, 0 as Index_length, 0 as Data_free, 0 as Auto_increment, '' as Create_time, '' as Update_time, '' as Check_time, '' as Collation, '' as Comment FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
 		if err != nil {
 			slog.Debug("Query error", "error", err)
@@ -168,9 +160,7 @@ func (h *Handler) HandleQuery(query string) (*mysql.Result, error) {
 			tableName = strings.TrimSuffix(tableName, "'")
 
 			if dbName != "" {
-				conn, ok := h.cp(dbName)
-				db := sql.OpenDB(conn)
-				defer db.Close()
+				db, ok := h.provider(dbName)
 				if ok {
 					if strings.HasPrefix(cleanQuery, "SELECT * FROM INFORMATION_SCHEMA.COLUMNS ") {
 						rows, err := db.Query("SELECT 'def' AS table_catalog, '"+dbName+"' AS table_schema, '"+tableName+"' AS table_name , name AS column_name, cid + 1 AS ordinal_position, dflt_value AS column_default, CASE WHEN [notnull] = 1 THEN 'NO' ELSE 'YES' END AS is_nullable, type AS data_type, null AS character_maximum_length, null AS character_octet_length, null AS numeric_precision, null AS numeric_scale, null AS datetime_precision, 'utf8mb4' AS character_set_name, 'utf8mb4_general_ci' AS collation_name, type AS column_type, CASE WHEN pk = 1 THEN 'PRI' ELSE '' END AS column_key, '' AS extra, 'select,insert,update,references' AS privileges, '' AS column_comment, '' AS generation_expression, null AS srs_id FROM PRAGMA_table_info(?) ORDER BY cid", tableName)

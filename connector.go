@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,9 +19,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/litesql/go-ha/wire"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/grpc"
+
+	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
+	hagrpc "github.com/litesql/go-ha/wire/grpc"
+	"github.com/litesql/go-ha/wire/mysql"
 )
 
 const DefaultStream = "ha_replication"
@@ -27,7 +33,8 @@ const DefaultStream = "ha_replication"
 var (
 	connectors        = make(map[string]*Connector)
 	natsClientServers = make(map[*EmbeddedNatsConfig]*natsClientServer)
-	mysqlServers      = make(map[int]*wire.Server)
+	grpcServers       = make(map[int]*hagrpc.Server)
+	mysqlServers      = make(map[int]*mysql.Server)
 	muConnectors      sync.RWMutex
 )
 
@@ -170,10 +177,9 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	}
 
 	c.connHooksProvider = connHooksFactory(c.name, c.replicationID, c.disableDDLSync, c.publisher, c.cdcPublisher)
-
+	c.db = sql.OpenDB(&c)
+	c.closers = append(c.closers, c.db)
 	if natsConn != nil {
-		db := sql.OpenDB(&c)
-		c.closers = append(c.closers, db)
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.replicationID, c.name))
 			c.subscriber, err = NewNATSSubscriber(NATSSubscriberConfig{
@@ -183,7 +189,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 				Stream:       c.replicationStream,
 				Subject:      subject,
 				Policy:       c.deliverPolicy,
-				DB:           db,
+				DB:           c.db,
 				ConnProvider: c.connHooksProvider,
 				Interceptor:  c.interceptor,
 				RowIdentify:  c.rowIdentify,
@@ -193,7 +199,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			}
 		}
 		if c.snapshotter == nil {
-			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, db, backupFn, c.snapshotInterval, c.subscriber, c.replicationID)
+			c.snapshotter, err = NewNATSSnapshotter(context.Background(), natsConn, c.replicas, c.replicationStream, c.db, backupFn, c.snapshotInterval, c.subscriber, c.replicationID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create NATS snapshotter: %w", err)
 			}
@@ -235,11 +241,41 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
+	if c.grpcPort > 0 {
+		if _, ok := grpcServers[c.grpcPort]; !ok {
+			lis, err := net.Listen("tcp", fmt.Sprintf(":%d", c.grpcPort))
+			if err != nil {
+				return nil, fmt.Errorf("failed to start gRPC server: %w", err)
+			}
+			s := grpc.NewServer()
+			sqlv1.RegisterDatabaseServiceServer(s, &hagrpc.Service{
+				DBProvider: func(dsn string) (hagrpc.HADB, bool) {
+					return nil, false
+				},
+			})
+			slog.Info("gRPC server listening", "addr", lis.Addr())
+			go func() {
+				if err := s.Serve(lis); err != nil {
+					log.Fatalf("failed to serve grpc: %v", err)
+				}
+			}()
+			grpcServers[c.grpcPort] = &hagrpc.Server{
+				Server: s,
+			}
+		} else {
+			grpcServers[c.grpcPort].ReferenceCount++
+		}
+	}
+
 	if c.mysqlPort > 0 {
 		if _, ok := mysqlServers[c.mysqlPort]; !ok {
-			mysqlServer := &wire.Server{
-				ConnectorProvider: func(dbName string) (driver.Connector, bool) {
-					return LookupConnector(dbName)
+			mysqlServer := &mysql.Server{
+				DBProvider: func(dbName string) (*sql.DB, bool) {
+					connector, ok := LookupConnector(dbName)
+					if !ok {
+						return nil, false
+					}
+					return connector.db, true
 				},
 				Databases: ListDSN,
 				Port:      c.mysqlPort,
@@ -308,6 +344,10 @@ type Connector struct {
 	leaderElectionLocalTarget string
 	leaderProvider            LeaderProvider
 
+	db *sql.DB
+
+	grpcPort int
+
 	mysqlPort int
 	mysqlUser string
 	mysqlPass string
@@ -340,6 +380,7 @@ var (
 )
 
 func (c *Connector) Start(db *sql.DB) error {
+	c.db = db
 	if c.autoStart {
 		return nil
 	}
@@ -382,6 +423,10 @@ func (c *Connector) Snapshotter() DBSnapshotter {
 	return c.snapshotter
 }
 
+func (c *Connector) DB() *sql.DB {
+	return c.DB()
+}
+
 func (c *Connector) DeliveredInfo(ctx context.Context, name string) (any, error) {
 	if c.subscriber == nil {
 		return nil, ErrSubscriberNotConfigured
@@ -408,6 +453,13 @@ func (c *Connector) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, 
 		return 0, nil, ErrSnapshotterNotConfigured
 	}
 	return c.snapshotter.LatestSnapshot(ctx)
+}
+
+func (c *Connector) PubSeq() uint64 {
+	if c.publisher == nil {
+		return 0
+	}
+	return c.publisher.Sequence()
 }
 
 func (c *Connector) LatestSeq() uint64 {
@@ -445,6 +497,16 @@ func (c *Connector) Close() {
 			}
 		}
 		return
+	}
+
+	if c.grpcPort > 0 {
+		if server, ok := grpcServers[c.grpcPort]; ok {
+			server.ReferenceCount--
+			if server.ReferenceCount <= 0 {
+				server.GracefulStop()
+				delete(grpcServers, c.grpcPort)
+			}
+		}
 	}
 
 	if c.mysqlPort > 0 {

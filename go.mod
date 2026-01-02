@@ -10,6 +10,8 @@ require (
 	github.com/nats-io/graft v0.0.0-20250422222653-97395d62ec95
 	github.com/nats-io/nats-server/v2 v2.12.3
 	github.com/nats-io/nats.go v1.48.0
+	google.golang.org/grpc v1.78.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -32,9 +34,10 @@ require (
 	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
+	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )

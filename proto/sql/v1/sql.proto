@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package sql.v1;
+
+import "google/protobuf/any.proto";
+
+option go_package = "github.com/litesql/go-ha/api/sql/v1;sqlv1";
+
+service DatabaseService {
+  rpc Query(stream QueryRequest) returns (stream QueryResponse) {}
+}
+
+enum QueryType {
+  QUERY_TYPE_UNSPECIFIED = 0;
+  QUERY_TYPE_EXEC = 1;
+}
+
+message QueryRequest {
+  QueryType type = 1;
+  string sql = 2;
+  repeated NamedValue params = 3;
+  string dsn = 4;
+}
+
+message NamedValue {
+  string name = 1;
+  int64 ordinal = 2;
+  google.protobuf.Any value = 3;
+}
+
+message QueryResponse {
+  Data result_set = 1;
+  int64 rows_affected = 2;
+  int64 last_insert_id = 3;
+  uint64 txseq = 4;
+  string error = 5;
+}
+
+message Data {
+  repeated string columns = 1;
+  repeated Row rows = 2;
+}
+
+message Row {
+  repeated google.protobuf.Any values = 1;
+}

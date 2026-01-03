@@ -27,10 +27,10 @@ type ChangeSet struct {
 
 type applyStrategyFn func(*ChangeSet, *sql.Tx) error
 
-func NewChangeSet(node string, filename string) *ChangeSet {
+func NewChangeSet(node string, replicationID string) *ChangeSet {
 	return &ChangeSet{
 		Node:          node,
-		Filename:      filename,
+		Filename:      replicationID,
 		applyStrategy: pkIdentifyStrategy,
 	}
 }

@@ -19,7 +19,7 @@ message QueryRequest {
   QueryType type = 1;
   string sql = 2;
   repeated NamedValue params = 3;
-  string dsn = 4;
+  string replication_id = 4;
 }
 
 message NamedValue {

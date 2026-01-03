@@ -73,7 +73,7 @@ type QueryRequest struct {
 	Type          QueryType              `protobuf:"varint,1,opt,name=type,proto3,enum=sql.v1.QueryType" json:"type,omitempty"`
 	Sql           string                 `protobuf:"bytes,2,opt,name=sql,proto3" json:"sql,omitempty"`
 	Params        []*NamedValue          `protobuf:"bytes,3,rep,name=params,proto3" json:"params,omitempty"`
-	Dsn           string                 `protobuf:"bytes,4,opt,name=dsn,proto3" json:"dsn,omitempty"`
+	ReplicationId string                 `protobuf:"bytes,4,opt,name=replication_id,json=replicationId,proto3" json:"replication_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -129,9 +129,9 @@ func (x *QueryRequest) GetParams() []*NamedValue {
 	return nil
 }
 
-func (x *QueryRequest) GetDsn() string {
+func (x *QueryRequest) GetReplicationId() string {
 	if x != nil {
-		return x.Dsn
+		return x.ReplicationId
 	}
 	return ""
 }
@@ -372,12 +372,12 @@ var File_sql_v1_sql_proto protoreflect.FileDescriptor
 
 const file_sql_v1_sql_proto_rawDesc = "" +
 	"\n" +
-	"\x10sql/v1/sql.proto\x12\x06sql.v1\x1a\x19google/protobuf/any.proto\"\x85\x01\n" +
+	"\x10sql/v1/sql.proto\x12\x06sql.v1\x1a\x19google/protobuf/any.proto\"\x9a\x01\n" +
 	"\fQueryRequest\x12%\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x11.sql.v1.QueryTypeR\x04type\x12\x10\n" +
 	"\x03sql\x18\x02 \x01(\tR\x03sql\x12*\n" +
-	"\x06params\x18\x03 \x03(\v2\x12.sql.v1.NamedValueR\x06params\x12\x10\n" +
-	"\x03dsn\x18\x04 \x01(\tR\x03dsn\"f\n" +
+	"\x06params\x18\x03 \x03(\v2\x12.sql.v1.NamedValueR\x06params\x12%\n" +
+	"\x0ereplication_id\x18\x04 \x01(\tR\rreplicationId\"f\n" +
 	"\n" +
 	"NamedValue\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +

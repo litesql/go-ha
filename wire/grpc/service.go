@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -23,7 +24,7 @@ type HADB interface {
 	DB() *sql.DB
 }
 
-type DBProvider func(dsn string) (HADB, bool)
+type DBProvider func(id string) (HADB, bool)
 
 type execQuerier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -49,13 +50,13 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 			}
 			return err
 		}
-		dsn := req.GetDsn()
-		if dsn != "" {
+		id := req.GetReplicationId()
+		if id != "" {
 			var ok bool
-			hadb, ok = s.DBProvider(dsn)
+			hadb, ok = s.DBProvider(id)
 			if !ok {
 				err := stream.Send(&sqlv1.QueryResponse{
-					Error: fmt.Sprintf("database provider %q not found", req.GetDsn()),
+					Error: fmt.Sprintf("database provider %q not found", req.GetReplicationId()),
 				})
 				if err != nil {
 					return err
@@ -65,7 +66,7 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 			newdb := hadb.DB()
 			if newdb == nil {
 				err := stream.Send(&sqlv1.QueryResponse{
-					Error: fmt.Sprintf("database pool for %q not found", req.GetDsn()),
+					Error: fmt.Sprintf("database pool for %q not found", req.GetReplicationId()),
 				})
 				if err != nil {
 					return err
@@ -79,6 +80,7 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 			db = newdb
 		}
 		sqlQuery := req.GetSql()
+		slog.Debug("gRPC service", "query", sqlQuery)
 		upperSQL := strings.ToUpper(sqlQuery)
 		switch {
 		case strings.HasPrefix(upperSQL, "BEGIN"):

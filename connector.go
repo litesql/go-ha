@@ -44,7 +44,7 @@ type ConnHooksProvider interface {
 	EnableHooks(*sql.Conn) error
 }
 
-type ConnHooksFactory func(nodeName string, filename string, disableDDLSync bool, publisher Publisher, cdc CDCPublisher) ConnHooksProvider
+type ConnHooksFactory func(nodeName string, replicationID string, disableDDLSync bool, publisher Publisher, cdc CDCPublisher, leader LeaderProvider) ConnHooksProvider
 
 func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
 	if c, ok := LookupConnector(dsn); ok {
@@ -176,7 +176,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
-	c.connHooksProvider = connHooksFactory(c.name, c.replicationID, c.disableDDLSync, c.publisher, c.cdcPublisher)
+	c.connHooksProvider = connHooksFactory(c.name, c.replicationID, c.disableDDLSync, c.publisher, c.cdcPublisher, c.leaderProvider)
 	c.db = sql.OpenDB(&c)
 	c.closers = append(c.closers, c.db)
 	if natsConn != nil {
@@ -249,8 +249,8 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			}
 			s := grpc.NewServer()
 			sqlv1.RegisterDatabaseServiceServer(s, &hagrpc.Service{
-				DBProvider: func(dsn string) (hagrpc.HADB, bool) {
-					connector, ok := LookupConnector(dsn)
+				DBProvider: func(id string) (hagrpc.HADB, bool) {
+					connector, ok := LookupConnectorByReplicationID(id)
 					if !ok {
 						return nil, false
 					}
@@ -372,6 +372,36 @@ func ListDSN() []string {
 	defer muConnectors.RUnlock()
 	keys := make([]string, 0, len(connectors))
 	for k := range connectors {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func LookupConnectorByReplicationID(id string) (*Connector, bool) {
+	muConnectors.RLock()
+	defer muConnectors.RUnlock()
+	for _, conn := range connectors {
+		if conn.replicationID == id {
+			return conn, true
+		}
+	}
+	return nil, false
+}
+
+func ListReplicationIDs() []string {
+	muConnectors.RLock()
+	defer muConnectors.RUnlock()
+	set := make(map[string]struct{})
+
+	for _, c := range connectors {
+		if c.replicationID == "" {
+			continue
+		}
+		set[c.replicationID] = struct{}{}
+	}
+	keys := make([]string, 0, len(set))
+	for k := range set {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)

@@ -242,11 +242,9 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	}
 	if c.autoStart {
 		if c.waitFor == nil {
-			if c.subscriber != nil {
-				err = c.subscriber.Start()
-				if err != nil {
-					return nil, fmt.Errorf("failed to start subscriber: %w", err)
-				}
+			err = c.subscriber.Start()
+			if err != nil {
+				return nil, fmt.Errorf("failed to start subscriber: %w", err)
 			}
 			if c.snapshotter != nil {
 				c.snapshotter.Start()
@@ -260,11 +258,9 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 				if delayedStartPub, ok := c.publisher.(*delayedStartPublisher); ok {
 					c.publisher = delayedStartPub.pub
 				}
-				if c.subscriber != nil {
-					err := c.subscriber.Start()
-					if err != nil {
-						slog.Error("failed to start subscriber", "error", err)
-					}
+				err := c.subscriber.Start()
+				if err != nil {
+					slog.Error("failed to start subscriber", "error", err)
 				}
 				if c.snapshotter != nil {
 					c.snapshotter.Start()
@@ -452,12 +448,12 @@ func (c *Connector) Start(db *sql.DB) error {
 		c.publisher = delayedStartPub.pub
 	}
 	var err error
-	if c.subscriber != nil {
-		if db != nil {
-			c.subscriber.SetDB(db)
-		}
-		err = c.subscriber.Start()
+
+	if db != nil {
+		c.subscriber.SetDB(db)
 	}
+	err = c.subscriber.Start()
+
 	if c.snapshotter != nil {
 		if db != nil {
 			c.snapshotter.SetDB(db)

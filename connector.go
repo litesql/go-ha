@@ -44,7 +44,16 @@ type ConnHooksProvider interface {
 	EnableHooks(*sql.Conn) error
 }
 
-type ConnHooksFactory func(nodeName string, replicationID string, disableDDLSync bool, publisher Publisher, cdc CDCPublisher, leader LeaderProvider) ConnHooksProvider
+type ConnHooksConfig struct {
+	NodeName       string
+	ReplicationID  string
+	DisableDDLSync bool
+	Publisher      Publisher
+	CDC            CDCPublisher
+	Leader         LeaderProvider
+}
+
+type ConnHooksFactory func(cfg ConnHooksConfig) ConnHooksProvider
 
 func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFactory, backupFn BackupFn, options ...Option) (*Connector, error) {
 	if c, ok := LookupConnector(dsn); ok {
@@ -176,7 +185,14 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
-	c.connHooksProvider = connHooksFactory(c.name, c.replicationID, c.disableDDLSync, c.publisher, c.cdcPublisher, c.leaderProvider)
+	c.connHooksProvider = connHooksFactory(ConnHooksConfig{
+		NodeName:       c.name,
+		ReplicationID:  c.replicationID,
+		DisableDDLSync: c.disableDDLSync,
+		Publisher:      c.publisher,
+		CDC:            c.cdcPublisher,
+		Leader:         c.leaderProvider,
+	})
 	c.db = sql.OpenDB(&c)
 	c.closers = append(c.closers, c.db)
 	if natsConn != nil {

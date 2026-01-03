@@ -50,6 +50,7 @@ type ConnHooksConfig struct {
 	DisableDDLSync bool
 	Publisher      Publisher
 	CDC            CDCPublisher
+	Subscriber     Subscriber
 	Leader         LeaderProvider
 }
 
@@ -191,6 +192,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		DisableDDLSync: c.disableDDLSync,
 		Publisher:      c.publisher,
 		CDC:            c.cdcPublisher,
+		Subscriber:     c.subscriber,
 		Leader:         c.leaderProvider,
 	})
 	c.db = sql.OpenDB(&c)

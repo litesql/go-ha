@@ -52,6 +52,7 @@ type ConnHooksConfig struct {
 	CDC            CDCPublisher
 	Subscriber     Subscriber
 	Leader         LeaderProvider
+	GrpcTimeout    time.Duration
 }
 
 type ConnHooksFactory func(cfg ConnHooksConfig) ConnHooksProvider
@@ -71,6 +72,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		rowIdentify:       PK,
 		replicationStream: DefaultStream,
 		publisherTimeout:  15 * time.Second,
+		grpcTimeout:       5 * time.Second,
 		replicas:          1,
 		leaderProvider:    &StaticLeader{},
 		autoStart:         true,
@@ -194,6 +196,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		CDC:            c.cdcPublisher,
 		Subscriber:     c.subscriber,
 		Leader:         c.leaderProvider,
+		GrpcTimeout:    c.grpcTimeout,
 	})
 	c.db = sql.OpenDB(&c)
 	c.closers = append(c.closers, c.db)
@@ -368,7 +371,8 @@ type Connector struct {
 
 	db *sql.DB
 
-	grpcPort int
+	grpcPort    int
+	grpcTimeout time.Duration
 
 	mysqlPort int
 	mysqlUser string

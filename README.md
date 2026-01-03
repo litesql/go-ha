@@ -30,7 +30,8 @@ Go database/sql base driver providing high availability for SQLite databases.
 | disablePublisher     | Disables the publisher for replication.                              | false           |
 | disableDBSnapshotter    | Disables the database snapshotter used for initial synchronization.                            | false           |
 | disableDDLSync          | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
-| grpcPort                | TCP port for the gRPC server                                       |      |   
+| grpcPort                | TCP port for the gRPC server                                       |      |  
+| grpcTimeout                | Timeout for the gRPC operations                                 | 5s   |   
 | leaderProvider            | Defines the strategy for determining a leader node in the cluster. This is useful for redirecting HTTP requests. Examples include `dynamic:http://host:port` or `static:http://host:port`.   |       |
 | mysqlPort               | TCP port for the MySQL protocol-compatible server.                                 |                 |
 | mysqlUser               | User for the MySQL protocol-compatible server.                                 | root            |
@@ -40,7 +41,7 @@ Go database/sql base driver providing high availability for SQLite databases.
 | natsName                | Sets the name of the embedded NATS server.                                                     |                 |
 | natsPort                | Configures the port for the embedded NATS server.                                              | 4222            |
 | natsStoreDir            | Directory to store data for the embedded NATS server.                                          |                 |
-| publisherTimeout        | Timeout duration for publishing replication events.                                            | 5s              |
+| publisherTimeout        | Timeout duration for publishing replication events.                                            | 15s              |
 | replicationStream       | Name of the replication stream used for synchronizing data.                                    |                 |
 | replicationURL          | URL used for connecting to the replication stream.                                             |                 |
 | replicas                | Number of replicas to maintain for high availability.                                          | 1               |

@@ -194,6 +194,12 @@ func WithGrpcPort(port int) Option {
 	}
 }
 
+func WithGrpcTimeout(timeout time.Duration) Option {
+	return func(c *Connector) {
+		c.grpcTimeout = timeout
+	}
+}
+
 func WithMySQLPort(port int) Option {
 	return func(c *Connector) {
 		c.mysqlPort = port
@@ -361,6 +367,12 @@ func NameToOptions(name string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid grpcPort: %w", err)
 			}
 			opts = append(opts, WithGrpcPort(port))
+		case "grpcTimeout":
+			timeout, err := time.ParseDuration(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid grpcTimeout: %w", err)
+			}
+			opts = append(opts, WithGrpcTimeout(timeout))
 		case "mysqlPort":
 			port, err := strconv.Atoi(value)
 			if err != nil {

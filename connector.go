@@ -44,15 +44,21 @@ type ConnHooksProvider interface {
 	EnableHooks(*sql.Conn) error
 }
 
+type TxSeqTracker interface {
+	LatestSeq() uint64
+}
+
+type TxSeqTrackerProvider func() TxSeqTracker
+
 type ConnHooksConfig struct {
-	NodeName       string
-	ReplicationID  string
-	DisableDDLSync bool
-	Publisher      Publisher
-	CDC            CDCPublisher
-	Subscriber     Subscriber
-	Leader         LeaderProvider
-	GrpcTimeout    time.Duration
+	NodeName             string
+	ReplicationID        string
+	DisableDDLSync       bool
+	Publisher            Publisher
+	CDC                  CDCPublisher
+	TxSeqTrackerProvider TxSeqTrackerProvider
+	Leader               LeaderProvider
+	GrpcTimeout          time.Duration
 }
 
 type ConnHooksFactory func(cfg ConnHooksConfig) ConnHooksProvider
@@ -194,9 +200,11 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		DisableDDLSync: c.disableDDLSync,
 		Publisher:      c.publisher,
 		CDC:            c.cdcPublisher,
-		Subscriber:     c.subscriber,
-		Leader:         c.leaderProvider,
-		GrpcTimeout:    c.grpcTimeout,
+		TxSeqTrackerProvider: func() TxSeqTracker {
+			return c.subscriber
+		},
+		Leader:      c.leaderProvider,
+		GrpcTimeout: c.grpcTimeout,
 	})
 	c.db = sql.OpenDB(&c)
 	c.closers = append(c.closers, c.db)
@@ -228,6 +236,9 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	}
 	if c.publisher == nil {
 		c.publisher = NewNoopPublisher()
+	}
+	if c.subscriber == nil {
+		c.subscriber = NewNoopSubscriber()
 	}
 	if c.autoStart {
 		if c.waitFor == nil {
@@ -430,10 +441,7 @@ func ListReplicationIDs() []string {
 	return keys
 }
 
-var (
-	ErrSubscriberNotConfigured  = errors.New("subscriber not configured")
-	ErrSnapshotterNotConfigured = errors.New("snapshotter not configured")
-)
+var ErrSnapshotterNotConfigured = errors.New("snapshotter not configured")
 
 func (c *Connector) Start(db *sql.DB) error {
 	c.db = db
@@ -484,16 +492,10 @@ func (c *Connector) DB() *sql.DB {
 }
 
 func (c *Connector) DeliveredInfo(ctx context.Context, name string) (any, error) {
-	if c.subscriber == nil {
-		return nil, ErrSubscriberNotConfigured
-	}
 	return c.subscriber.DeliveredInfo(ctx, name)
 }
 
 func (c *Connector) RemoveConsumer(ctx context.Context, name string) error {
-	if c.subscriber == nil {
-		return ErrSubscriberNotConfigured
-	}
 	return c.subscriber.RemoveConsumer(ctx, name)
 }
 
@@ -519,9 +521,6 @@ func (c *Connector) PubSeq() uint64 {
 }
 
 func (c *Connector) LatestSeq() uint64 {
-	if c.subscriber == nil {
-		return 0
-	}
 	return c.subscriber.LatestSeq()
 }
 
@@ -678,9 +677,9 @@ type CDCPublisher interface {
 }
 
 type Subscriber interface {
+	TxSeqTracker
 	SetDB(*sql.DB)
 	Start() error
-	LatestSeq() uint64
 	RemoveConsumer(ctx context.Context, name string) error
 	DeliveredInfo(ctx context.Context, name string) (any, error)
 }

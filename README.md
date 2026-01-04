@@ -8,9 +8,9 @@ Go database/sql base driver providing high availability for SQLite databases.
 - Replication: Synchronize data across nodes using NATS.
 - Customize the replication strategy
 - Leaderless clusters: Read/Write from/to any node. **Last-writer wins** by default, but you can customize conflict resolutions by implementing *ChangeSetInterceptor*.
+- Leader-based cluster: Write operations are redirected to the leader to prevent conflicts entirely.
 - Embedded or External NATS: Choose between an embedded NATS server or an external one for replication.
 - Easy to integrate with existing Go projects.
-- Built-in MySQL protocol server for broader compatibility.
 
 ## Drivers
 

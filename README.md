@@ -33,9 +33,6 @@ Go database/sql base driver providing high availability for SQLite databases.
 | grpcPort                | TCP port for the gRPC server                                       |      |  
 | grpcTimeout                | Timeout for the gRPC operations                                 | 5s   |   
 | leaderProvider            | Defines the strategy for determining a leader node in the cluster. This is useful for redirecting HTTP requests. Examples include `dynamic:http://host:port` or `static:http://host:port`.   |       |
-| mysqlPort               | TCP port for the MySQL protocol-compatible server.                                 |                 |
-| mysqlUser               | User for the MySQL protocol-compatible server.                                 | root            |
-| mysqlPass               | Password for the MySQL protocol-compatible server.                                 |                 |
 | name                    | Name of the node in the cluster.                                                   |                 |
 | natsConfigFile          | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |
 | natsName                | Sets the name of the embedded NATS server.                                                     |                 |

@@ -24,8 +24,7 @@ import (
 	"google.golang.org/grpc"
 
 	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
-	hagrpc "github.com/litesql/go-ha/wire/grpc"
-	"github.com/litesql/go-ha/wire/mysql"
+	hagrpc "github.com/litesql/go-ha/grpc"
 )
 
 const DefaultStream = "ha_replication"
@@ -34,7 +33,6 @@ var (
 	connectors        = make(map[string]*Connector)
 	natsClientServers = make(map[*EmbeddedNatsConfig]*natsClientServer)
 	grpcServers       = make(map[int]*hagrpc.Server)
-	mysqlServers      = make(map[int]*mysql.Server)
 	muConnectors      sync.RWMutex
 )
 
@@ -82,7 +80,6 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		replicas:          1,
 		leaderProvider:    &StaticLeader{},
 		autoStart:         true,
-		mysqlUser:         "root",
 		natsOptions: []nats.Option{
 			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 				if err != nil {
@@ -299,31 +296,6 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
-	if c.mysqlPort > 0 {
-		if _, ok := mysqlServers[c.mysqlPort]; !ok {
-			mysqlServer := &mysql.Server{
-				DBProvider: func(dbName string) (*sql.DB, bool) {
-					connector, ok := LookupConnector(dbName)
-					if !ok {
-						return nil, false
-					}
-					return connector.db, true
-				},
-				Databases: ListDSN,
-				Port:      c.mysqlPort,
-				User:      c.mysqlUser,
-				Pass:      c.mysqlPass,
-			}
-			err := mysqlServer.ListenAndServe()
-			if err != nil {
-				return nil, fmt.Errorf("failed to start MySQL server on port %d: %w", c.mysqlPort, err)
-			}
-			mysqlServers[c.mysqlPort] = mysqlServer
-		} else {
-			mysqlServers[c.mysqlPort].ReferenceCount++
-		}
-	}
-
 	connectors[dsn] = &c
 	return &c, nil
 }
@@ -380,10 +352,6 @@ type Connector struct {
 
 	grpcPort    int
 	grpcTimeout time.Duration
-
-	mysqlPort int
-	mysqlUser string
-	mysqlPass string
 
 	closers []io.Closer
 }
@@ -556,16 +524,6 @@ func (c *Connector) Close() {
 			if server.ReferenceCount <= 0 {
 				server.GracefulStop()
 				delete(grpcServers, c.grpcPort)
-			}
-		}
-	}
-
-	if c.mysqlPort > 0 {
-		if server, ok := mysqlServers[c.mysqlPort]; ok {
-			server.ReferenceCount--
-			if server.ReferenceCount <= 0 {
-				server.Close()
-				delete(mysqlServers, c.mysqlPort)
 			}
 		}
 	}

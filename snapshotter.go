@@ -103,16 +103,18 @@ func (s *NATSSnapshotter) Start() {
 	}
 	s.started = true
 	s.mu.Unlock()
-	ticker := time.NewTicker(s.interval)
-	for {
-		sequence, err := s.TakeSnapshot(context.Background())
-		if err != nil {
-			slog.Error("failed to take snapshot", "error", err)
-		} else if sequence > 0 {
-			slog.Debug("snapshot taken", "sequence", sequence)
+	go func() {
+		ticker := time.NewTicker(s.interval)
+		for {
+			sequence, err := s.TakeSnapshot(context.Background())
+			if err != nil {
+				slog.Error("failed to take snapshot", "error", err)
+			} else if sequence > 0 {
+				slog.Debug("snapshot taken", "sequence", sequence)
+			}
+			<-ticker.C
 		}
-		<-ticker.C
-	}
+	}()
 
 }
 

@@ -49,6 +49,9 @@ type SQLiteParserListener interface {
 	// EnterCreate_table_stmt is called when entering the create_table_stmt production.
 	EnterCreate_table_stmt(c *Create_table_stmtContext)
 
+	// EnterTable_options is called when entering the table_options production.
+	EnterTable_options(c *Table_optionsContext)
+
 	// EnterColumn_def is called when entering the column_def production.
 	EnterColumn_def(c *Column_defContext)
 
@@ -82,20 +85,14 @@ type SQLiteParserListener interface {
 	// EnterWith_clause is called when entering the with_clause production.
 	EnterWith_clause(c *With_clauseContext)
 
-	// EnterCte_table_name is called when entering the cte_table_name production.
-	EnterCte_table_name(c *Cte_table_nameContext)
-
-	// EnterRecursive_cte is called when entering the recursive_cte production.
-	EnterRecursive_cte(c *Recursive_cteContext)
-
 	// EnterCommon_table_expression is called when entering the common_table_expression production.
 	EnterCommon_table_expression(c *Common_table_expressionContext)
 
+	// EnterCte_table_name is called when entering the cte_table_name production.
+	EnterCte_table_name(c *Cte_table_nameContext)
+
 	// EnterDelete_stmt is called when entering the delete_stmt production.
 	EnterDelete_stmt(c *Delete_stmtContext)
-
-	// EnterDelete_stmt_limited is called when entering the delete_stmt_limited production.
-	EnterDelete_stmt_limited(c *Delete_stmt_limitedContext)
 
 	// EnterDetach_stmt is called when entering the detach_stmt production.
 	EnterDetach_stmt(c *Detach_stmtContext)
@@ -106,11 +103,53 @@ type SQLiteParserListener interface {
 	// EnterExpr is called when entering the expr production.
 	EnterExpr(c *ExprContext)
 
+	// EnterExpr_recursive is called when entering the expr_recursive production.
+	EnterExpr_recursive(c *Expr_recursiveContext)
+
+	// EnterExpr_or is called when entering the expr_or production.
+	EnterExpr_or(c *Expr_orContext)
+
+	// EnterExpr_and is called when entering the expr_and production.
+	EnterExpr_and(c *Expr_andContext)
+
+	// EnterExpr_not is called when entering the expr_not production.
+	EnterExpr_not(c *Expr_notContext)
+
+	// EnterExpr_binary is called when entering the expr_binary production.
+	EnterExpr_binary(c *Expr_binaryContext)
+
+	// EnterExpr_comparison is called when entering the expr_comparison production.
+	EnterExpr_comparison(c *Expr_comparisonContext)
+
+	// EnterExpr_bitwise is called when entering the expr_bitwise production.
+	EnterExpr_bitwise(c *Expr_bitwiseContext)
+
+	// EnterExpr_addition is called when entering the expr_addition production.
+	EnterExpr_addition(c *Expr_additionContext)
+
+	// EnterExpr_multiplication is called when entering the expr_multiplication production.
+	EnterExpr_multiplication(c *Expr_multiplicationContext)
+
+	// EnterExpr_string is called when entering the expr_string production.
+	EnterExpr_string(c *Expr_stringContext)
+
+	// EnterExpr_collate is called when entering the expr_collate production.
+	EnterExpr_collate(c *Expr_collateContext)
+
+	// EnterExpr_unary is called when entering the expr_unary production.
+	EnterExpr_unary(c *Expr_unaryContext)
+
+	// EnterExpr_base is called when entering the expr_base production.
+	EnterExpr_base(c *Expr_baseContext)
+
 	// EnterRaise_function is called when entering the raise_function production.
 	EnterRaise_function(c *Raise_functionContext)
 
 	// EnterLiteral_value is called when entering the literal_value production.
 	EnterLiteral_value(c *Literal_valueContext)
+
+	// EnterPercentile_clause is called when entering the percentile_clause production.
+	EnterPercentile_clause(c *Percentile_clauseContext)
 
 	// EnterValue_row is called when entering the value_row production.
 	EnterValue_row(c *Value_rowContext)
@@ -145,15 +184,6 @@ type SQLiteParserListener interface {
 	// EnterSelect_core is called when entering the select_core production.
 	EnterSelect_core(c *Select_coreContext)
 
-	// EnterFactored_select_stmt is called when entering the factored_select_stmt production.
-	EnterFactored_select_stmt(c *Factored_select_stmtContext)
-
-	// EnterSimple_select_stmt is called when entering the simple_select_stmt production.
-	EnterSimple_select_stmt(c *Simple_select_stmtContext)
-
-	// EnterCompound_select_stmt is called when entering the compound_select_stmt production.
-	EnterCompound_select_stmt(c *Compound_select_stmtContext)
-
 	// EnterTable_or_subquery is called when entering the table_or_subquery production.
 	EnterTable_or_subquery(c *Table_or_subqueryContext)
 
@@ -174,9 +204,6 @@ type SQLiteParserListener interface {
 
 	// EnterColumn_name_list is called when entering the column_name_list production.
 	EnterColumn_name_list(c *Column_name_listContext)
-
-	// EnterUpdate_stmt_limited is called when entering the update_stmt_limited production.
-	EnterUpdate_stmt_limited(c *Update_stmt_limitedContext)
 
 	// EnterQualified_table_name is called when entering the qualified_table_name production.
 	EnterQualified_table_name(c *Qualified_table_nameContext)
@@ -199,23 +226,11 @@ type SQLiteParserListener interface {
 	// EnterFrame_clause is called when entering the frame_clause production.
 	EnterFrame_clause(c *Frame_clauseContext)
 
-	// EnterSimple_function_invocation is called when entering the simple_function_invocation production.
-	EnterSimple_function_invocation(c *Simple_function_invocationContext)
+	// EnterOrder_clause is called when entering the order_clause production.
+	EnterOrder_clause(c *Order_clauseContext)
 
-	// EnterAggregate_function_invocation is called when entering the aggregate_function_invocation production.
-	EnterAggregate_function_invocation(c *Aggregate_function_invocationContext)
-
-	// EnterWindow_function_invocation is called when entering the window_function_invocation production.
-	EnterWindow_function_invocation(c *Window_function_invocationContext)
-
-	// EnterCommon_table_stmt is called when entering the common_table_stmt production.
-	EnterCommon_table_stmt(c *Common_table_stmtContext)
-
-	// EnterOrder_by_stmt is called when entering the order_by_stmt production.
-	EnterOrder_by_stmt(c *Order_by_stmtContext)
-
-	// EnterLimit_stmt is called when entering the limit_stmt production.
-	EnterLimit_stmt(c *Limit_stmtContext)
+	// EnterLimit_clause is called when entering the limit_clause production.
+	EnterLimit_clause(c *Limit_clauseContext)
 
 	// EnterOrdering_term is called when entering the ordering_term production.
 	EnterOrdering_term(c *Ordering_termContext)
@@ -232,47 +247,29 @@ type SQLiteParserListener interface {
 	// EnterFrame_single is called when entering the frame_single production.
 	EnterFrame_single(c *Frame_singleContext)
 
-	// EnterWindow_function is called when entering the window_function production.
-	EnterWindow_function(c *Window_functionContext)
-
-	// EnterOffset is called when entering the offset production.
-	EnterOffset(c *OffsetContext)
-
-	// EnterDefault_value is called when entering the default_value production.
-	EnterDefault_value(c *Default_valueContext)
-
-	// EnterPartition_by is called when entering the partition_by production.
-	EnterPartition_by(c *Partition_byContext)
-
-	// EnterOrder_by_expr is called when entering the order_by_expr production.
-	EnterOrder_by_expr(c *Order_by_exprContext)
-
-	// EnterOrder_by_expr_asc_desc is called when entering the order_by_expr_asc_desc production.
-	EnterOrder_by_expr_asc_desc(c *Order_by_expr_asc_descContext)
-
-	// EnterExpr_asc_desc is called when entering the expr_asc_desc production.
-	EnterExpr_asc_desc(c *Expr_asc_descContext)
-
-	// EnterInitial_select is called when entering the initial_select production.
-	EnterInitial_select(c *Initial_selectContext)
-
-	// EnterRecursive_select is called when entering the recursive_select production.
-	EnterRecursive_select(c *Recursive_selectContext)
-
-	// EnterUnary_operator is called when entering the unary_operator production.
-	EnterUnary_operator(c *Unary_operatorContext)
-
 	// EnterError_message is called when entering the error_message production.
 	EnterError_message(c *Error_messageContext)
+
+	// EnterFilename is called when entering the filename production.
+	EnterFilename(c *FilenameContext)
 
 	// EnterModule_argument is called when entering the module_argument production.
 	EnterModule_argument(c *Module_argumentContext)
 
-	// EnterColumn_alias is called when entering the column_alias production.
-	EnterColumn_alias(c *Column_aliasContext)
+	// EnterModule_argument_outer is called when entering the module_argument_outer production.
+	EnterModule_argument_outer(c *Module_argument_outerContext)
 
-	// EnterKeyword is called when entering the keyword production.
-	EnterKeyword(c *KeywordContext)
+	// EnterModule_argument_inner is called when entering the module_argument_inner production.
+	EnterModule_argument_inner(c *Module_argument_innerContext)
+
+	// EnterFallback_excluding_conflicts is called when entering the fallback_excluding_conflicts production.
+	EnterFallback_excluding_conflicts(c *Fallback_excluding_conflictsContext)
+
+	// EnterJoin_keyword is called when entering the join_keyword production.
+	EnterJoin_keyword(c *Join_keywordContext)
+
+	// EnterFallback is called when entering the fallback production.
+	EnterFallback(c *FallbackContext)
 
 	// EnterName is called when entering the name production.
 	EnterName(c *NameContext)
@@ -291,6 +288,12 @@ type SQLiteParserListener interface {
 
 	// EnterColumn_name is called when entering the column_name production.
 	EnterColumn_name(c *Column_nameContext)
+
+	// EnterColumn_name_excluding_string is called when entering the column_name_excluding_string production.
+	EnterColumn_name_excluding_string(c *Column_name_excluding_stringContext)
+
+	// EnterColumn_alias is called when entering the column_alias production.
+	EnterColumn_alias(c *Column_aliasContext)
 
 	// EnterCollation_name is called when entering the collation_name production.
 	EnterCollation_name(c *Collation_nameContext)
@@ -319,8 +322,8 @@ type SQLiteParserListener interface {
 	// EnterTable_alias is called when entering the table_alias production.
 	EnterTable_alias(c *Table_aliasContext)
 
-	// EnterTransaction_name is called when entering the transaction_name production.
-	EnterTransaction_name(c *Transaction_nameContext)
+	// EnterTable_alias_excluding_joins is called when entering the table_alias_excluding_joins production.
+	EnterTable_alias_excluding_joins(c *Table_alias_excluding_joinsContext)
 
 	// EnterWindow_name is called when entering the window_name production.
 	EnterWindow_name(c *Window_nameContext)
@@ -328,20 +331,20 @@ type SQLiteParserListener interface {
 	// EnterAlias is called when entering the alias production.
 	EnterAlias(c *AliasContext)
 
-	// EnterFilename is called when entering the filename production.
-	EnterFilename(c *FilenameContext)
-
 	// EnterBase_window_name is called when entering the base_window_name production.
 	EnterBase_window_name(c *Base_window_nameContext)
 
-	// EnterSimple_func is called when entering the simple_func production.
-	EnterSimple_func(c *Simple_funcContext)
-
-	// EnterAggregate_func is called when entering the aggregate_func production.
-	EnterAggregate_func(c *Aggregate_funcContext)
-
 	// EnterTable_function_name is called when entering the table_function_name production.
 	EnterTable_function_name(c *Table_function_nameContext)
+
+	// EnterAny_name_excluding_raise is called when entering the any_name_excluding_raise production.
+	EnterAny_name_excluding_raise(c *Any_name_excluding_raiseContext)
+
+	// EnterAny_name_excluding_joins is called when entering the any_name_excluding_joins production.
+	EnterAny_name_excluding_joins(c *Any_name_excluding_joinsContext)
+
+	// EnterAny_name_excluding_string is called when entering the any_name_excluding_string production.
+	EnterAny_name_excluding_string(c *Any_name_excluding_stringContext)
 
 	// EnterAny_name is called when entering the any_name production.
 	EnterAny_name(c *Any_nameContext)
@@ -388,6 +391,9 @@ type SQLiteParserListener interface {
 	// ExitCreate_table_stmt is called when exiting the create_table_stmt production.
 	ExitCreate_table_stmt(c *Create_table_stmtContext)
 
+	// ExitTable_options is called when exiting the table_options production.
+	ExitTable_options(c *Table_optionsContext)
+
 	// ExitColumn_def is called when exiting the column_def production.
 	ExitColumn_def(c *Column_defContext)
 
@@ -421,20 +427,14 @@ type SQLiteParserListener interface {
 	// ExitWith_clause is called when exiting the with_clause production.
 	ExitWith_clause(c *With_clauseContext)
 
-	// ExitCte_table_name is called when exiting the cte_table_name production.
-	ExitCte_table_name(c *Cte_table_nameContext)
-
-	// ExitRecursive_cte is called when exiting the recursive_cte production.
-	ExitRecursive_cte(c *Recursive_cteContext)
-
 	// ExitCommon_table_expression is called when exiting the common_table_expression production.
 	ExitCommon_table_expression(c *Common_table_expressionContext)
 
+	// ExitCte_table_name is called when exiting the cte_table_name production.
+	ExitCte_table_name(c *Cte_table_nameContext)
+
 	// ExitDelete_stmt is called when exiting the delete_stmt production.
 	ExitDelete_stmt(c *Delete_stmtContext)
-
-	// ExitDelete_stmt_limited is called when exiting the delete_stmt_limited production.
-	ExitDelete_stmt_limited(c *Delete_stmt_limitedContext)
 
 	// ExitDetach_stmt is called when exiting the detach_stmt production.
 	ExitDetach_stmt(c *Detach_stmtContext)
@@ -445,11 +445,53 @@ type SQLiteParserListener interface {
 	// ExitExpr is called when exiting the expr production.
 	ExitExpr(c *ExprContext)
 
+	// ExitExpr_recursive is called when exiting the expr_recursive production.
+	ExitExpr_recursive(c *Expr_recursiveContext)
+
+	// ExitExpr_or is called when exiting the expr_or production.
+	ExitExpr_or(c *Expr_orContext)
+
+	// ExitExpr_and is called when exiting the expr_and production.
+	ExitExpr_and(c *Expr_andContext)
+
+	// ExitExpr_not is called when exiting the expr_not production.
+	ExitExpr_not(c *Expr_notContext)
+
+	// ExitExpr_binary is called when exiting the expr_binary production.
+	ExitExpr_binary(c *Expr_binaryContext)
+
+	// ExitExpr_comparison is called when exiting the expr_comparison production.
+	ExitExpr_comparison(c *Expr_comparisonContext)
+
+	// ExitExpr_bitwise is called when exiting the expr_bitwise production.
+	ExitExpr_bitwise(c *Expr_bitwiseContext)
+
+	// ExitExpr_addition is called when exiting the expr_addition production.
+	ExitExpr_addition(c *Expr_additionContext)
+
+	// ExitExpr_multiplication is called when exiting the expr_multiplication production.
+	ExitExpr_multiplication(c *Expr_multiplicationContext)
+
+	// ExitExpr_string is called when exiting the expr_string production.
+	ExitExpr_string(c *Expr_stringContext)
+
+	// ExitExpr_collate is called when exiting the expr_collate production.
+	ExitExpr_collate(c *Expr_collateContext)
+
+	// ExitExpr_unary is called when exiting the expr_unary production.
+	ExitExpr_unary(c *Expr_unaryContext)
+
+	// ExitExpr_base is called when exiting the expr_base production.
+	ExitExpr_base(c *Expr_baseContext)
+
 	// ExitRaise_function is called when exiting the raise_function production.
 	ExitRaise_function(c *Raise_functionContext)
 
 	// ExitLiteral_value is called when exiting the literal_value production.
 	ExitLiteral_value(c *Literal_valueContext)
+
+	// ExitPercentile_clause is called when exiting the percentile_clause production.
+	ExitPercentile_clause(c *Percentile_clauseContext)
 
 	// ExitValue_row is called when exiting the value_row production.
 	ExitValue_row(c *Value_rowContext)
@@ -484,15 +526,6 @@ type SQLiteParserListener interface {
 	// ExitSelect_core is called when exiting the select_core production.
 	ExitSelect_core(c *Select_coreContext)
 
-	// ExitFactored_select_stmt is called when exiting the factored_select_stmt production.
-	ExitFactored_select_stmt(c *Factored_select_stmtContext)
-
-	// ExitSimple_select_stmt is called when exiting the simple_select_stmt production.
-	ExitSimple_select_stmt(c *Simple_select_stmtContext)
-
-	// ExitCompound_select_stmt is called when exiting the compound_select_stmt production.
-	ExitCompound_select_stmt(c *Compound_select_stmtContext)
-
 	// ExitTable_or_subquery is called when exiting the table_or_subquery production.
 	ExitTable_or_subquery(c *Table_or_subqueryContext)
 
@@ -513,9 +546,6 @@ type SQLiteParserListener interface {
 
 	// ExitColumn_name_list is called when exiting the column_name_list production.
 	ExitColumn_name_list(c *Column_name_listContext)
-
-	// ExitUpdate_stmt_limited is called when exiting the update_stmt_limited production.
-	ExitUpdate_stmt_limited(c *Update_stmt_limitedContext)
 
 	// ExitQualified_table_name is called when exiting the qualified_table_name production.
 	ExitQualified_table_name(c *Qualified_table_nameContext)
@@ -538,23 +568,11 @@ type SQLiteParserListener interface {
 	// ExitFrame_clause is called when exiting the frame_clause production.
 	ExitFrame_clause(c *Frame_clauseContext)
 
-	// ExitSimple_function_invocation is called when exiting the simple_function_invocation production.
-	ExitSimple_function_invocation(c *Simple_function_invocationContext)
+	// ExitOrder_clause is called when exiting the order_clause production.
+	ExitOrder_clause(c *Order_clauseContext)
 
-	// ExitAggregate_function_invocation is called when exiting the aggregate_function_invocation production.
-	ExitAggregate_function_invocation(c *Aggregate_function_invocationContext)
-
-	// ExitWindow_function_invocation is called when exiting the window_function_invocation production.
-	ExitWindow_function_invocation(c *Window_function_invocationContext)
-
-	// ExitCommon_table_stmt is called when exiting the common_table_stmt production.
-	ExitCommon_table_stmt(c *Common_table_stmtContext)
-
-	// ExitOrder_by_stmt is called when exiting the order_by_stmt production.
-	ExitOrder_by_stmt(c *Order_by_stmtContext)
-
-	// ExitLimit_stmt is called when exiting the limit_stmt production.
-	ExitLimit_stmt(c *Limit_stmtContext)
+	// ExitLimit_clause is called when exiting the limit_clause production.
+	ExitLimit_clause(c *Limit_clauseContext)
 
 	// ExitOrdering_term is called when exiting the ordering_term production.
 	ExitOrdering_term(c *Ordering_termContext)
@@ -571,47 +589,29 @@ type SQLiteParserListener interface {
 	// ExitFrame_single is called when exiting the frame_single production.
 	ExitFrame_single(c *Frame_singleContext)
 
-	// ExitWindow_function is called when exiting the window_function production.
-	ExitWindow_function(c *Window_functionContext)
-
-	// ExitOffset is called when exiting the offset production.
-	ExitOffset(c *OffsetContext)
-
-	// ExitDefault_value is called when exiting the default_value production.
-	ExitDefault_value(c *Default_valueContext)
-
-	// ExitPartition_by is called when exiting the partition_by production.
-	ExitPartition_by(c *Partition_byContext)
-
-	// ExitOrder_by_expr is called when exiting the order_by_expr production.
-	ExitOrder_by_expr(c *Order_by_exprContext)
-
-	// ExitOrder_by_expr_asc_desc is called when exiting the order_by_expr_asc_desc production.
-	ExitOrder_by_expr_asc_desc(c *Order_by_expr_asc_descContext)
-
-	// ExitExpr_asc_desc is called when exiting the expr_asc_desc production.
-	ExitExpr_asc_desc(c *Expr_asc_descContext)
-
-	// ExitInitial_select is called when exiting the initial_select production.
-	ExitInitial_select(c *Initial_selectContext)
-
-	// ExitRecursive_select is called when exiting the recursive_select production.
-	ExitRecursive_select(c *Recursive_selectContext)
-
-	// ExitUnary_operator is called when exiting the unary_operator production.
-	ExitUnary_operator(c *Unary_operatorContext)
-
 	// ExitError_message is called when exiting the error_message production.
 	ExitError_message(c *Error_messageContext)
+
+	// ExitFilename is called when exiting the filename production.
+	ExitFilename(c *FilenameContext)
 
 	// ExitModule_argument is called when exiting the module_argument production.
 	ExitModule_argument(c *Module_argumentContext)
 
-	// ExitColumn_alias is called when exiting the column_alias production.
-	ExitColumn_alias(c *Column_aliasContext)
+	// ExitModule_argument_outer is called when exiting the module_argument_outer production.
+	ExitModule_argument_outer(c *Module_argument_outerContext)
 
-	// ExitKeyword is called when exiting the keyword production.
-	ExitKeyword(c *KeywordContext)
+	// ExitModule_argument_inner is called when exiting the module_argument_inner production.
+	ExitModule_argument_inner(c *Module_argument_innerContext)
+
+	// ExitFallback_excluding_conflicts is called when exiting the fallback_excluding_conflicts production.
+	ExitFallback_excluding_conflicts(c *Fallback_excluding_conflictsContext)
+
+	// ExitJoin_keyword is called when exiting the join_keyword production.
+	ExitJoin_keyword(c *Join_keywordContext)
+
+	// ExitFallback is called when exiting the fallback production.
+	ExitFallback(c *FallbackContext)
 
 	// ExitName is called when exiting the name production.
 	ExitName(c *NameContext)
@@ -630,6 +630,12 @@ type SQLiteParserListener interface {
 
 	// ExitColumn_name is called when exiting the column_name production.
 	ExitColumn_name(c *Column_nameContext)
+
+	// ExitColumn_name_excluding_string is called when exiting the column_name_excluding_string production.
+	ExitColumn_name_excluding_string(c *Column_name_excluding_stringContext)
+
+	// ExitColumn_alias is called when exiting the column_alias production.
+	ExitColumn_alias(c *Column_aliasContext)
 
 	// ExitCollation_name is called when exiting the collation_name production.
 	ExitCollation_name(c *Collation_nameContext)
@@ -658,8 +664,8 @@ type SQLiteParserListener interface {
 	// ExitTable_alias is called when exiting the table_alias production.
 	ExitTable_alias(c *Table_aliasContext)
 
-	// ExitTransaction_name is called when exiting the transaction_name production.
-	ExitTransaction_name(c *Transaction_nameContext)
+	// ExitTable_alias_excluding_joins is called when exiting the table_alias_excluding_joins production.
+	ExitTable_alias_excluding_joins(c *Table_alias_excluding_joinsContext)
 
 	// ExitWindow_name is called when exiting the window_name production.
 	ExitWindow_name(c *Window_nameContext)
@@ -667,20 +673,20 @@ type SQLiteParserListener interface {
 	// ExitAlias is called when exiting the alias production.
 	ExitAlias(c *AliasContext)
 
-	// ExitFilename is called when exiting the filename production.
-	ExitFilename(c *FilenameContext)
-
 	// ExitBase_window_name is called when exiting the base_window_name production.
 	ExitBase_window_name(c *Base_window_nameContext)
 
-	// ExitSimple_func is called when exiting the simple_func production.
-	ExitSimple_func(c *Simple_funcContext)
-
-	// ExitAggregate_func is called when exiting the aggregate_func production.
-	ExitAggregate_func(c *Aggregate_funcContext)
-
 	// ExitTable_function_name is called when exiting the table_function_name production.
 	ExitTable_function_name(c *Table_function_nameContext)
+
+	// ExitAny_name_excluding_raise is called when exiting the any_name_excluding_raise production.
+	ExitAny_name_excluding_raise(c *Any_name_excluding_raiseContext)
+
+	// ExitAny_name_excluding_joins is called when exiting the any_name_excluding_joins production.
+	ExitAny_name_excluding_joins(c *Any_name_excluding_joinsContext)
+
+	// ExitAny_name_excluding_string is called when exiting the any_name_excluding_string production.
+	ExitAny_name_excluding_string(c *Any_name_excluding_stringContext)
 
 	// ExitAny_name is called when exiting the any_name production.
 	ExitAny_name(c *Any_nameContext)

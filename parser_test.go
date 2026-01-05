@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -291,7 +292,7 @@ func TestStatementModifiesDatabase(t *testing.T) {
 			modifiesDatabase: true,
 		},
 		"pragma": {
-			sql:              "PRAGMA foreign_keys = ON",
+			sql:              "PRAGMA foreign_keys = 'ON'",
 			modifiesDatabase: true,
 		},
 		"vacuum": {
@@ -372,6 +373,50 @@ func TestStatementModifiesDatabase(t *testing.T) {
 			}
 			if stmt.ModifiesDatabase() != tc.modifiesDatabase {
 				t.Fatalf("expected modifiesDatabase to be %v but got %v", tc.modifiesDatabase, stmt.ModifiesDatabase())
+			}
+		})
+	}
+}
+
+func TestReturning(t *testing.T) {
+	tests := map[string]struct {
+		sql     string
+		columns []string
+	}{
+		"all": {
+			sql:     "INSERT INTO user(name) VALUES('name') RETURNING *",
+			columns: []string{"*"},
+		},
+		"simple": {
+			sql:     "INSERT INTO user(name) VALUES('name') RETURNING id",
+			columns: []string{"id"},
+		},
+		"multiple": {
+			sql:     "INSERT INTO user(name) VALUES('name') RETURNING id, created_at",
+			columns: []string{"id", "created_at"},
+		},
+		"simple alias": {
+			sql:     "INSERT INTO user(name) VALUES('name') RETURNING id identify",
+			columns: []string{"identify"},
+		},
+		"simple mix alias": {
+			sql:     "INSERT INTO user(name) VALUES('name') RETURNING id as identify, created_at",
+			columns: []string{"identify", "created_at"},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stmt, err := ParseStatement(context.TODO(), tc.sql)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if stmt == nil {
+				t.Fatalf("expected statement to be not nil")
+				return
+			}
+			if !slices.Equal(stmt.Columns(), tc.columns) {
+				t.Fatalf("expected columns to be %v but got %v", tc.columns, stmt.Columns())
 			}
 		})
 	}

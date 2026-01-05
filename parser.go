@@ -257,7 +257,7 @@ type sqlListener struct {
 	sourceIndex int
 }
 
-func (s *sqlListener) ExitExpr(ctx *parser.ExprContext) {
+func (s *sqlListener) ExitExpr_base(ctx *parser.Expr_baseContext) {
 	if ctx.BIND_PARAMETER() != nil {
 		if !slices.Contains(s.statement().parameters, ctx.GetText()) || ctx.GetText() == "?" {
 			s.statement().parameters = append(s.statement().parameters, ctx.GetText())
@@ -352,16 +352,24 @@ func (s *sqlListener) ExitSql_stmt(c *parser.Sql_stmtContext) {
 }
 
 func (s *sqlListener) ExitReturning_clause(ctx *parser.Returning_clauseContext) {
-	if len(ctx.AllResult_column()) > 0 {
-		s.statement().columns = make([]string, 0)
-	}
-	for _, col := range ctx.AllResult_column() {
-		if col.Column_alias() != nil {
-			s.statement().columns = append(s.statement().columns, col.Column_alias().GetText())
+	s.statement().columns = make([]string, 0)
+	for _, col := range ctx.GetChildren() {
+		switch v := col.(type) {
+		case parser.IColumn_aliasContext:
+			s.statement().columns = append(s.statement().columns[0:len(s.statement().columns)-1], v.GetText())
 			continue
+		case parser.IExprContext:
+			s.statement().columns = append(s.statement().columns, v.GetText())
 		}
-		s.statement().columns = append(s.statement().columns, col.GetText())
 	}
+
+	if len(ctx.AllSTAR()) > 0 {
+		for _, col := range ctx.AllSTAR() {
+			s.statement().columns = append(s.statement().columns, col.GetText())
+		}
+		return
+	}
+
 }
 
 func (s *sqlListener) ExitCreate_table_stmt(ctx *parser.Create_table_stmtContext) {

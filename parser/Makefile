@@ -6,5 +6,5 @@ antlr-4.13.1-complete.jar:
 
 download:
 	curl -O https://raw.githubusercontent.com/antlr/grammars-v4/refs/heads/master/sql/sqlite/SQLiteLexer.g4
-	#sed -i "s/BIND_PARAMETER: '?' DIGIT\* | \[:@\$\] IDENTIFIER;/BIND_PARAMETER: '?' DIGIT\* | '\$' DIGIT+ | \[:@\$\] IDENTIFIER;/g" SQLiteLexer.g4
+	sed -i "s/BIND_PARAMETER: '?' DIGIT\\* | \\[:@\\$$\\] IDENTIFIER;/BIND_PARAMETER: '?' DIGIT\\* | '$$' DIGIT+ | \\[:@\\$$\\] IDENTIFIER;/g" SQLiteLexer.g4
 	curl -O https://raw.githubusercontent.com/antlr/grammars-v4/refs/heads/master/sql/sqlite/SQLiteParser.g4

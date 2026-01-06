@@ -421,3 +421,47 @@ func TestReturning(t *testing.T) {
 		})
 	}
 }
+
+func TestOrderBy(t *testing.T) {
+	tests := map[string]struct {
+		sql     string
+		orderBy []string
+	}{
+		"zero": {
+			sql:     "SELECT * FROM user",
+			orderBy: []string{},
+		},
+		"one": {
+			sql:     "SELECT * FROM user ORDER BY 1",
+			orderBy: []string{"1"},
+		},
+		"simple": {
+			sql:     "SELECT * FROM user ORDER BY name",
+			orderBy: []string{"name"},
+		},
+		"multiple": {
+			sql:     "SELECT * FROM user ORDER BY name, id",
+			orderBy: []string{"name", "id"},
+		},
+		"simple desc": {
+			sql:     "SELECT * FROM user ORDER BY name, id desc",
+			orderBy: []string{"name", "id DESC"},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stmt, err := ParseStatement(context.TODO(), tc.sql)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if stmt == nil {
+				t.Fatalf("expected statement to be not nil")
+				return
+			}
+			if !slices.Equal(stmt.OrderBy(), tc.orderBy) {
+				t.Fatalf("expected orderBy to be %v but got %v", tc.orderBy, stmt.OrderBy())
+			}
+		})
+	}
+}

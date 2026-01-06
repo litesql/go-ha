@@ -48,6 +48,7 @@ type Statement struct {
 	typ              string
 	parameters       []string
 	columns          []string
+	orderBy          []string
 	ddl              bool
 	hasIfExists      bool
 	hasModifier      bool
@@ -129,6 +130,10 @@ func (s *Statement) Parameters() []string {
 
 func (s *Statement) Columns() []string {
 	return s.columns
+}
+
+func (s *Statement) OrderBy() []string {
+	return s.orderBy
 }
 
 func (s *Statement) IsExplain() bool {
@@ -368,6 +373,18 @@ func (s *sqlListener) ExitReturning_clause(ctx *parser.Returning_clauseContext) 
 			s.statement().columns = append(s.statement().columns, col.GetText())
 		}
 		return
+	}
+
+}
+
+func (s *sqlListener) ExitOrder_clause(ctx *parser.Order_clauseContext) {
+
+	for _, term := range ctx.AllOrdering_term() {
+		exp := term.Expr().GetText()
+		if ascDesc := term.Asc_desc(); ascDesc != nil && ascDesc.DESC_() != nil {
+			exp += " DESC"
+		}
+		s.statement().orderBy = append(s.statement().orderBy, exp)
 	}
 
 }

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,6 +58,7 @@ type ConnHooksConfig struct {
 	TxSeqTrackerProvider TxSeqTrackerProvider
 	Leader               LeaderProvider
 	GrpcTimeout          time.Duration
+	QueryRouter          *regexp.Regexp
 }
 
 type ConnHooksFactory func(cfg ConnHooksConfig) ConnHooksProvider
@@ -202,6 +204,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		},
 		Leader:      c.leaderProvider,
 		GrpcTimeout: c.grpcTimeout,
+		QueryRouter: c.queryRouter,
 	})
 	c.db = sql.OpenDB(&c)
 	c.closers = append(c.closers, c.db)
@@ -348,7 +351,8 @@ type Connector struct {
 	leaderElectionLocalTarget string
 	leaderProvider            LeaderProvider
 
-	db *sql.DB
+	db          *sql.DB
+	queryRouter *regexp.Regexp
 
 	grpcPort    int
 	grpcTimeout time.Duration

@@ -3,6 +3,7 @@ package ha
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -200,6 +201,12 @@ func WithGrpcTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithQueryRouter(re *regexp.Regexp) Option {
+	return func(c *Connector) {
+		c.queryRouter = re
+	}
+}
+
 func NameToOptions(name string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
@@ -370,7 +377,12 @@ func NameToOptions(name string) (string, []Option, error) {
 			default:
 				return "", nil, fmt.Errorf("invalid leaderStrategy, prefix with static or dynamic option. Examples: leaderStrategy=dynamic:http://localhost:8080 or leaderStrategy=static:http://host:port")
 			}
-
+		case "queryRouter":
+			re, err := regexp.Compile(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid queryRouter: %w", err)
+			}
+			opts = append(opts, WithQueryRouter(re))
 		case "autoStart":
 			autoStart, err := strconv.ParseBool(value)
 			if err != nil {

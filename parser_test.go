@@ -431,6 +431,14 @@ func TestOrderBy(t *testing.T) {
 			sql:     "SELECT * FROM user",
 			orderBy: []string{},
 		},
+		"not main select": {
+			sql:     "SELECT u.* FROM user u WHERE u.ID IN (SELECT id FROM other_users ORDER BY name, id LIMIT 1)",
+			orderBy: []string{},
+		},
+		"main select too": {
+			sql:     "SELECT u.* FROM user u WHERE u.ID IN (SELECT id FROM other_users ORDER BY name, id LIMIT 1) ORDER BY id",
+			orderBy: []string{"id"},
+		},
 		"one": {
 			sql:     "SELECT * FROM user ORDER BY 1",
 			orderBy: []string{"1"},

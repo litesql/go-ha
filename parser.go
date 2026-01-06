@@ -53,6 +53,7 @@ type Statement struct {
 	hasIfExists      bool
 	hasModifier      bool
 	modifiesDatabase bool
+	selectDepth      int
 }
 
 func UnverifiedStatement(source string, hasDistinct bool,
@@ -271,6 +272,7 @@ func (s *sqlListener) ExitExpr_base(ctx *parser.Expr_baseContext) {
 }
 
 func (s *sqlListener) ExitSelect_stmt(c *parser.Select_stmtContext) {
+	c.Order_clause()
 	if c.AllSelect_core() != nil && len(c.AllSelect_core()) > 0 {
 		mainSelect := c.AllSelect_core()[0]
 		if mainSelect.DISTINCT_() != nil {
@@ -296,6 +298,14 @@ func (s *sqlListener) EnterSql_stmt(c *parser.Sql_stmtContext) {
 
 func (s *sqlListener) statement() *Statement {
 	return s.statements[s.current]
+}
+
+func (s *sqlListener) EnterSelect_core(ctx *parser.Select_coreContext) {
+	s.statement().selectDepth++
+}
+
+func (s *sqlListener) ExitSelect_core(ctx *parser.Select_coreContext) {
+	s.statement().selectDepth--
 }
 
 func (s *sqlListener) ExitSql_stmt(c *parser.Sql_stmtContext) {
@@ -374,19 +384,19 @@ func (s *sqlListener) ExitReturning_clause(ctx *parser.Returning_clauseContext) 
 		}
 		return
 	}
-
 }
 
 func (s *sqlListener) ExitOrder_clause(ctx *parser.Order_clauseContext) {
-
-	for _, term := range ctx.AllOrdering_term() {
-		exp := term.Expr().GetText()
-		if ascDesc := term.Asc_desc(); ascDesc != nil && ascDesc.DESC_() != nil {
-			exp += " DESC"
+	if s.statement().selectDepth == 0 {
+		s.statement().orderBy = make([]string, 0)
+		for _, term := range ctx.AllOrdering_term() {
+			exp := term.Expr().GetText()
+			if ascDesc := term.Asc_desc(); ascDesc != nil && ascDesc.DESC_() != nil {
+				exp += " DESC"
+			}
+			s.statement().orderBy = append(s.statement().orderBy, exp)
 		}
-		s.statement().orderBy = append(s.statement().orderBy, exp)
 	}
-
 }
 
 func (s *sqlListener) ExitCreate_table_stmt(ctx *parser.Create_table_stmtContext) {

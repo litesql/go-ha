@@ -498,7 +498,7 @@ func TestProjectionFunctions(t *testing.T) {
 			},
 		},
 		"subquery": {
-			sql:                 "SELECT id FROM user WHERE salary = (SELECT MAX(salary) FROM user)",
+			sql:                 "SELECT id FROM user WHERE salary = (SELECT MAX(salary) FROM user) LIMIT 6 OFFSET 2",
 			projectionFunctions: map[int]string{},
 		},
 	}

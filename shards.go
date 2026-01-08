@@ -139,7 +139,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 		return nil, errs
 	}
 	if shardsResultsCount > 1 {
-		if err := result.mergeAndSort(stmt.ProjectionFunctions(), stmt.OrderBy()); err != nil {
+		if err := result.mergeAndSort(stmt.ProjectionFunctions(), stmt.OrderBy(), stmt.Limit()); err != nil {
 			return nil, err
 		}
 	}
@@ -250,8 +250,7 @@ func (r *bufferedResults) empty() bool {
 	return len(r.values) == 0
 }
 
-func (r *bufferedResults) mergeAndSort(funcs map[int]string, orderBy []string) error {
-
+func (r *bufferedResults) mergeAndSort(funcs map[int]string, orderBy []string, limit int) error {
 	if len(funcs) > 0 {
 		r.values = r.merge(funcs)
 	}
@@ -263,6 +262,11 @@ func (r *bufferedResults) mergeAndSort(funcs map[int]string, orderBy []string) e
 
 		slices.SortFunc(r.values, r.sortFunc(orderBy))
 	}
+
+	if limit >= 0 && len(r.values) > limit {
+		r.values = r.values[0:limit]
+	}
+
 	return nil
 }
 
@@ -324,9 +328,16 @@ func agregateStrategyFactory(typ string) aggregateStrategy {
 			if new == nil {
 				return agg
 			}
-			total, _ := agg.(int64)
-			newValue, _ := new.(int64)
-			return total + newValue
+			switch total := agg.(type) {
+			case int64:
+				newValue, _ := new.(int64)
+				return total + newValue
+			case float64:
+				newValue, _ := new.(float64)
+				return total + newValue
+			default:
+				panic("invalid COUNT/SUM/TOTAL aggregation type:" + fmt.Sprintf("%T", agg))
+			}
 		}
 	case "MIN":
 		return func(agg driver.Value, new driver.Value) driver.Value {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/antlr4-go/antlr/v4"
@@ -50,6 +51,7 @@ type Statement struct {
 	parameters          []string
 	columns             []string
 	orderBy             []string
+	limit               int
 	ddl                 bool
 	hasIfExists         bool
 	hasModifier         bool
@@ -137,6 +139,10 @@ func (s *Statement) Columns() []string {
 
 func (s *Statement) OrderBy() []string {
 	return s.orderBy
+}
+
+func (s *Statement) Limit() int {
+	return s.limit
 }
 
 func (s *Statement) ProjectionFunctions() map[int]string {
@@ -311,6 +317,7 @@ func (s *sqlListener) ExitSelect_stmt(c *parser.Select_stmtContext) {
 func (s *sqlListener) EnterSql_stmt(c *parser.Sql_stmtContext) {
 	s.statements = append(s.statements, &Statement{
 		projectionFunctions: make(map[int]string),
+		limit:               -1,
 	})
 }
 
@@ -417,7 +424,19 @@ func (s *sqlListener) ExitOrder_clause(ctx *parser.Order_clauseContext) {
 		}
 		s.statement().orderBy = append(s.statement().orderBy, exp)
 	}
+}
 
+func (s *sqlListener) ExitLimit_clause(ctx *parser.Limit_clauseContext) {
+	if s.statement().selectDepth != 0 {
+		return
+	}
+
+	if len(ctx.AllExpr()) > 0 {
+		exp := ctx.Expr(0)
+		if limit, err := strconv.Atoi(exp.GetText()); err == nil {
+			s.statement().limit = limit
+		}
+	}
 }
 
 func (s *sqlListener) ExitCreate_table_stmt(ctx *parser.Create_table_stmtContext) {

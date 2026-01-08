@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"testing"
 )
@@ -452,7 +453,7 @@ func TestOrderBy(t *testing.T) {
 			orderBy: []string{"name", "id"},
 		},
 		"simple desc": {
-			sql:     "SELECT * FROM user ORDER BY name, id desc",
+			sql:     "SELECT count(tet), name, sum(text) FROM user ORDER BY name, id desc",
 			orderBy: []string{"name", "id DESC"},
 		},
 	}
@@ -469,6 +470,50 @@ func TestOrderBy(t *testing.T) {
 			}
 			if !slices.Equal(stmt.OrderBy(), tc.orderBy) {
 				t.Fatalf("expected orderBy to be %v but got %v", tc.orderBy, stmt.OrderBy())
+			}
+		})
+	}
+}
+
+func TestProjectionFunctions(t *testing.T) {
+	tests := map[string]struct {
+		sql                 string
+		projectionFunctions map[int]string
+	}{
+		"zero": {
+			sql:                 "SELECT * FROM user",
+			projectionFunctions: map[int]string{},
+		},
+		"simple": {
+			sql: "SELECT count(*) FROM user",
+			projectionFunctions: map[int]string{
+				0: "COUNT",
+			},
+		},
+		"multiple": {
+			sql: "SELECT id, count(*), sum(salary) FROM user",
+			projectionFunctions: map[int]string{
+				1: "COUNT",
+				2: "SUM",
+			},
+		},
+		"subquery": {
+			sql:                 "SELECT id FROM user WHERE salary = (SELECT MAX(salary) FROM user)",
+			projectionFunctions: map[int]string{},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stmt, err := ParseStatement(context.TODO(), tc.sql)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if stmt == nil {
+				t.Fatalf("expected statement to be not nil")
+				return
+			}
+			if !maps.Equal(stmt.ProjectionFunctions(), tc.projectionFunctions) {
+				t.Fatalf("expected projection functions to be %v but got %v", tc.projectionFunctions, stmt.ProjectionFunctions())
 			}
 		})
 	}

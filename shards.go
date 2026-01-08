@@ -69,7 +69,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 	})
 
 	chValues := make(chan []driver.Value)
-	if (!stmt.HasDistinct() && len(stmt.OrderBy()) == 0) || len(dbs) < 2 {
+	if (!stmt.HasDistinct() && len(stmt.OrderBy()) == 0 && len(stmt.ProjectionFunctions()) == 0) || len(dbs) < 2 {
 		result := newStreamResults(chValues)
 		var nextErrs error
 		chFirstResponse := make(chan struct{})
@@ -114,6 +114,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 	}
 	result := newBufferedResults(stmt.HasDistinct())
 	var nextErrs error
+	var shardsResultsCount int
 	for rows := range chRows {
 		result.setColumns(rows.Columns())
 		size := len(rows.Columns())
@@ -128,6 +129,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 				break
 			}
 			result.append(row)
+			shardsResultsCount++
 		}
 		rows.Close()
 	}
@@ -136,8 +138,10 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 	if result.empty() && errs != nil {
 		return nil, errs
 	}
-	if err := result.sort(stmt.OrderBy()); err != nil {
-		return nil, err
+	if shardsResultsCount > 1 {
+		if err := result.mergeAndSort(stmt.ProjectionFunctions(), stmt.OrderBy()); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
@@ -246,16 +250,160 @@ func (r *bufferedResults) empty() bool {
 	return len(r.values) == 0
 }
 
-func (r *bufferedResults) sort(orderBy []string) error {
-	if len(orderBy) == 0 {
-		return nil
-	}
-	if err := r.validOrderByClause(orderBy); err != nil {
-		return err
+func (r *bufferedResults) mergeAndSort(funcs map[int]string, orderBy []string) error {
+
+	if len(funcs) > 0 {
+		r.values = r.merge(funcs)
 	}
 
-	slices.SortFunc(r.values, r.sortFunc(orderBy))
+	if len(orderBy) > 0 && len(r.values) > 1 {
+		if err := r.validOrderByClause(orderBy); err != nil {
+			return err
+		}
+
+		slices.SortFunc(r.values, r.sortFunc(orderBy))
+	}
 	return nil
+}
+
+func (r *bufferedResults) merge(funcs map[int]string) [][]driver.Value {
+	if len(r.columns) == len(funcs) {
+		return r.values
+	}
+
+	funcsColumnIndexes := make([]int, 0)
+	for i := range funcs {
+		funcsColumnIndexes = append(funcsColumnIndexes, i)
+	}
+
+	groupByColumns := make([]int, 0)
+	for i := range len(r.columns) {
+		if slices.Contains(funcsColumnIndexes, i) {
+			continue
+		}
+		groupByColumns = append(groupByColumns, i)
+	}
+
+	strategies := make(map[int]aggregateStrategy)
+	for i, typ := range funcs {
+		strategies[i] = agregateStrategyFactory(typ)
+	}
+
+	groupByValues := make(map[string][]driver.Value)
+	for _, newRow := range r.values {
+		key := rowKey(newRow, groupByColumns)
+		if row, ok := groupByValues[key]; ok {
+			for i, aggregateStrategy := range strategies {
+				agg := row[i]
+				row[i] = aggregateStrategy(agg, newRow[i])
+			}
+			groupByValues[key] = row
+		} else {
+			groupByValues[key] = newRow
+		}
+	}
+	values := make([][]driver.Value, len(groupByValues))
+	count := 0
+	for _, row := range groupByValues {
+		values[count] = row
+		count++
+	}
+
+	return values
+}
+
+type aggregateStrategy func(agg driver.Value, new driver.Value) driver.Value
+
+func agregateStrategyFactory(typ string) aggregateStrategy {
+	switch typ {
+	case "COUNT", "SUM", "TOTAL":
+		return func(agg driver.Value, new driver.Value) driver.Value {
+			if agg == nil {
+				return new
+			}
+			if new == nil {
+				return agg
+			}
+			total, _ := agg.(int64)
+			newValue, _ := new.(int64)
+			return total + newValue
+		}
+	case "MIN":
+		return func(agg driver.Value, new driver.Value) driver.Value {
+			if agg == nil {
+				return new
+			}
+			if new == nil {
+				return agg
+			}
+			switch x := agg.(type) {
+			case int64:
+				return min(x, new.(int64))
+			case float64:
+				return min(x, new.(float64))
+			case string:
+				return min(x, new.(string))
+			case time.Time:
+				y, _ := new.(time.Time)
+				res := x.Compare(y)
+				if res < 0 {
+					return x
+				}
+				return y
+			case []byte:
+				y, _ := new.([]byte)
+				res := bytes.Compare(x, y)
+				if res < 0 {
+					return x
+				}
+				return y
+			default:
+				panic("invalid MIN aggregation type:" + fmt.Sprintf("%T", agg))
+			}
+		}
+	case "MAX":
+		return func(agg driver.Value, new driver.Value) driver.Value {
+			if agg == nil {
+				return new
+			}
+			if new == nil {
+				return agg
+			}
+			switch x := agg.(type) {
+			case int64:
+				return max(x, new.(int64))
+			case float64:
+				return max(x, new.(float64))
+			case string:
+				return max(x, new.(string))
+			case time.Time:
+				y, _ := new.(time.Time)
+				res := x.Compare(y)
+				if res > 0 {
+					return x
+				}
+				return y
+			case []byte:
+				y, _ := new.([]byte)
+				res := bytes.Compare(x, y)
+				if res > 0 {
+					return x
+				}
+				return y
+			default:
+				panic("invalid MAX aggregation type:" + fmt.Sprintf("%T", agg))
+			}
+		}
+	}
+	panic("usupported function: " + typ)
+}
+
+func rowKey(row []driver.Value, keyColumns []int) string {
+	key := make([]string, len(keyColumns))
+	for i, rowIndex := range keyColumns {
+		key[i] = fmt.Sprint(row[rowIndex])
+	}
+	return strings.Join(key, "-_-")
 }
 
 func (r *bufferedResults) sliceIndexByNameOrOrder(column string) int {

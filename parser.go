@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrInvalidSQL = fmt.Errorf("invalid SQL")
-	cache, _      = lru.New[string, []*Statement](256)
+	ErrInvalidSQL            = fmt.Errorf("invalid SQL")
+	cache, _                 = lru.New[string, []*Statement](256)
+	supportedProjectionFuncs = []string{"COUNT", "SUM", "TOTAL", "MAX", "MIN"}
 )
 
 const (
@@ -42,18 +43,19 @@ const (
 )
 
 type Statement struct {
-	source           string
-	hasDistinct      bool
-	hasReturning     bool
-	typ              string
-	parameters       []string
-	columns          []string
-	orderBy          []string
-	ddl              bool
-	hasIfExists      bool
-	hasModifier      bool
-	modifiesDatabase bool
-	selectDepth      int
+	source              string
+	hasDistinct         bool
+	hasReturning        bool
+	typ                 string
+	parameters          []string
+	columns             []string
+	orderBy             []string
+	ddl                 bool
+	hasIfExists         bool
+	hasModifier         bool
+	modifiesDatabase    bool
+	selectDepth         int
+	projectionFunctions map[int]string
 }
 
 func UnverifiedStatement(source string, hasDistinct bool,
@@ -135,6 +137,10 @@ func (s *Statement) Columns() []string {
 
 func (s *Statement) OrderBy() []string {
 	return s.orderBy
+}
+
+func (s *Statement) ProjectionFunctions() map[int]string {
+	return s.projectionFunctions
 }
 
 func (s *Statement) IsExplain() bool {
@@ -272,7 +278,6 @@ func (s *sqlListener) ExitExpr_base(ctx *parser.Expr_baseContext) {
 }
 
 func (s *sqlListener) ExitSelect_stmt(c *parser.Select_stmtContext) {
-	c.Order_clause()
 	if c.AllSelect_core() != nil && len(c.AllSelect_core()) > 0 {
 		mainSelect := c.AllSelect_core()[0]
 		if mainSelect.DISTINCT_() != nil {
@@ -282,7 +287,18 @@ func (s *sqlListener) ExitSelect_stmt(c *parser.Select_stmtContext) {
 		}
 
 		s.statement().columns = make([]string, 0)
-		for _, col := range mainSelect.AllResult_column() {
+		s.statement().projectionFunctions = make(map[int]string)
+		for i, col := range mainSelect.AllResult_column() {
+			if col.Expr() != nil {
+				exp := col.Expr().GetText()
+				index := strings.LastIndex(exp, "(")
+				if index > 0 {
+					fn := strings.ToUpper(exp[0:index])
+					if slices.Contains(supportedProjectionFuncs, fn) {
+						s.statement().projectionFunctions[i] = fn
+					}
+				}
+			}
 			if col.Column_alias() != nil {
 				s.statement().columns = append(s.statement().columns, col.Column_alias().GetText())
 				continue
@@ -293,7 +309,9 @@ func (s *sqlListener) ExitSelect_stmt(c *parser.Select_stmtContext) {
 }
 
 func (s *sqlListener) EnterSql_stmt(c *parser.Sql_stmtContext) {
-	s.statements = append(s.statements, &Statement{})
+	s.statements = append(s.statements, &Statement{
+		projectionFunctions: make(map[int]string),
+	})
 }
 
 func (s *sqlListener) statement() *Statement {
@@ -387,16 +405,19 @@ func (s *sqlListener) ExitReturning_clause(ctx *parser.Returning_clauseContext) 
 }
 
 func (s *sqlListener) ExitOrder_clause(ctx *parser.Order_clauseContext) {
-	if s.statement().selectDepth == 0 {
-		s.statement().orderBy = make([]string, 0)
-		for _, term := range ctx.AllOrdering_term() {
-			exp := term.Expr().GetText()
-			if ascDesc := term.Asc_desc(); ascDesc != nil && ascDesc.DESC_() != nil {
-				exp += " DESC"
-			}
-			s.statement().orderBy = append(s.statement().orderBy, exp)
-		}
+	if s.statement().selectDepth != 0 {
+		return
 	}
+
+	s.statement().orderBy = make([]string, 0)
+	for _, term := range ctx.AllOrdering_term() {
+		exp := term.Expr().GetText()
+		if ascDesc := term.Asc_desc(); ascDesc != nil && ascDesc.DESC_() != nil {
+			exp += " DESC"
+		}
+		s.statement().orderBy = append(s.statement().orderBy, exp)
+	}
+
 }
 
 func (s *sqlListener) ExitCreate_table_stmt(ctx *parser.Create_table_stmtContext) {

@@ -68,8 +68,8 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 		}
 	})
 
-	chValues := make(chan []driver.Value)
 	if (!stmt.HasDistinct() && len(stmt.OrderBy()) == 0 && len(stmt.ProjectionFunctions()) == 0) || len(dbs) < 2 {
+		chValues := make(chan []driver.Value)
 		result := newStreamResults(chValues)
 		var nextErrs error
 		chFirstResponse := make(chan struct{})

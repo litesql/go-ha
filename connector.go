@@ -284,6 +284,8 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 					}
 					return connector, true
 				},
+				DSNList:           ListDSN,
+				ReplicationIDList: ListReplicationIDs,
 			})
 			slog.Info("gRPC server listening", "addr", lis.Addr())
 			go func() {
@@ -559,6 +561,13 @@ func (c *noHooksConnector) Connect(ctx context.Context) (driver.Conn, error) {
 }
 
 func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequence uint64, reader io.ReadCloser, err error) {
+	if len(options) == 0 {
+		connector, ok := LookupConnector(dsn)
+		if !ok {
+			return 0, nil, fmt.Errorf("no database available with DSN: %s", dsn)
+		}
+		return connector.LatestSnapshot(ctx)
+	}
 	var c Connector
 	for _, opt := range options {
 		opt(&c)

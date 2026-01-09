@@ -19,7 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DatabaseService_Query_FullMethodName = "/sql.v1.DatabaseService/Query"
+	DatabaseService_Query_FullMethodName           = "/sql.v1.DatabaseService/Query"
+	DatabaseService_DataSourceNames_FullMethodName = "/sql.v1.DatabaseService/DataSourceNames"
+	DatabaseService_LatestSnapshot_FullMethodName  = "/sql.v1.DatabaseService/LatestSnapshot"
+	DatabaseService_ReplicationIDs_FullMethodName  = "/sql.v1.DatabaseService/ReplicationIDs"
 )
 
 // DatabaseServiceClient is the client API for DatabaseService service.
@@ -27,6 +30,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DatabaseServiceClient interface {
 	Query(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[QueryRequest, QueryResponse], error)
+	DataSourceNames(ctx context.Context, in *DataSourceNamesRequest, opts ...grpc.CallOption) (*DataSourceNamesResponse, error)
+	LatestSnapshot(ctx context.Context, in *LatestSnapshotRequest, opts ...grpc.CallOption) (*LatestSnapshotResponse, error)
+	ReplicationIDs(ctx context.Context, in *ReplicationIDsRequest, opts ...grpc.CallOption) (*ReplicationIDsResponse, error)
 }
 
 type databaseServiceClient struct {
@@ -50,11 +56,44 @@ func (c *databaseServiceClient) Query(ctx context.Context, opts ...grpc.CallOpti
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DatabaseService_QueryClient = grpc.BidiStreamingClient[QueryRequest, QueryResponse]
 
+func (c *databaseServiceClient) DataSourceNames(ctx context.Context, in *DataSourceNamesRequest, opts ...grpc.CallOption) (*DataSourceNamesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataSourceNamesResponse)
+	err := c.cc.Invoke(ctx, DatabaseService_DataSourceNames_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *databaseServiceClient) LatestSnapshot(ctx context.Context, in *LatestSnapshotRequest, opts ...grpc.CallOption) (*LatestSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LatestSnapshotResponse)
+	err := c.cc.Invoke(ctx, DatabaseService_LatestSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *databaseServiceClient) ReplicationIDs(ctx context.Context, in *ReplicationIDsRequest, opts ...grpc.CallOption) (*ReplicationIDsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReplicationIDsResponse)
+	err := c.cc.Invoke(ctx, DatabaseService_ReplicationIDs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DatabaseServiceServer is the server API for DatabaseService service.
 // All implementations must embed UnimplementedDatabaseServiceServer
 // for forward compatibility.
 type DatabaseServiceServer interface {
 	Query(grpc.BidiStreamingServer[QueryRequest, QueryResponse]) error
+	DataSourceNames(context.Context, *DataSourceNamesRequest) (*DataSourceNamesResponse, error)
+	LatestSnapshot(context.Context, *LatestSnapshotRequest) (*LatestSnapshotResponse, error)
+	ReplicationIDs(context.Context, *ReplicationIDsRequest) (*ReplicationIDsResponse, error)
 	mustEmbedUnimplementedDatabaseServiceServer()
 }
 
@@ -67,6 +106,15 @@ type UnimplementedDatabaseServiceServer struct{}
 
 func (UnimplementedDatabaseServiceServer) Query(grpc.BidiStreamingServer[QueryRequest, QueryResponse]) error {
 	return status.Error(codes.Unimplemented, "method Query not implemented")
+}
+func (UnimplementedDatabaseServiceServer) DataSourceNames(context.Context, *DataSourceNamesRequest) (*DataSourceNamesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DataSourceNames not implemented")
+}
+func (UnimplementedDatabaseServiceServer) LatestSnapshot(context.Context, *LatestSnapshotRequest) (*LatestSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LatestSnapshot not implemented")
+}
+func (UnimplementedDatabaseServiceServer) ReplicationIDs(context.Context, *ReplicationIDsRequest) (*ReplicationIDsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReplicationIDs not implemented")
 }
 func (UnimplementedDatabaseServiceServer) mustEmbedUnimplementedDatabaseServiceServer() {}
 func (UnimplementedDatabaseServiceServer) testEmbeddedByValue()                         {}
@@ -96,13 +144,80 @@ func _DatabaseService_Query_Handler(srv interface{}, stream grpc.ServerStream) e
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DatabaseService_QueryServer = grpc.BidiStreamingServer[QueryRequest, QueryResponse]
 
+func _DatabaseService_DataSourceNames_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataSourceNamesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DatabaseServiceServer).DataSourceNames(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DatabaseService_DataSourceNames_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DatabaseServiceServer).DataSourceNames(ctx, req.(*DataSourceNamesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DatabaseService_LatestSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LatestSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DatabaseServiceServer).LatestSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DatabaseService_LatestSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DatabaseServiceServer).LatestSnapshot(ctx, req.(*LatestSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DatabaseService_ReplicationIDs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplicationIDsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DatabaseServiceServer).ReplicationIDs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DatabaseService_ReplicationIDs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DatabaseServiceServer).ReplicationIDs(ctx, req.(*ReplicationIDsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DatabaseService_ServiceDesc is the grpc.ServiceDesc for DatabaseService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var DatabaseService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "sql.v1.DatabaseService",
 	HandlerType: (*DatabaseServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "DataSourceNames",
+			Handler:    _DatabaseService_DataSourceNames_Handler,
+		},
+		{
+			MethodName: "LatestSnapshot",
+			Handler:    _DatabaseService_LatestSnapshot_Handler,
+		},
+		{
+			MethodName: "ReplicationIDs",
+			Handler:    _DatabaseService_ReplicationIDs_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Query",

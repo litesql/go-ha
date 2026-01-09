@@ -16,15 +16,21 @@ import (
 
 type Service struct {
 	sqlv1.UnimplementedDatabaseServiceServer
-	DBProvider DBProvider
+	DBProvider        DBProvider
+	DSNList           DataSourceNamesFn
+	ReplicationIDList ReplicationIDsFn
 }
 
 type HADB interface {
 	PubSeq() uint64
 	DB() *sql.DB
+	LatestSnapshot(context.Context) (uint64, io.ReadCloser, error)
 }
 
 type DBProvider func(id string) (HADB, bool)
+
+type DataSourceNamesFn func() []string
+type ReplicationIDsFn func() []string
 
 type execQuerier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -226,6 +232,40 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 			}
 		}
 	}
+}
+
+func (s *Service) DataSourceNames(ctx context.Context, req *sqlv1.DataSourceNamesRequest) (*sqlv1.DataSourceNamesResponse, error) {
+	return &sqlv1.DataSourceNamesResponse{
+		Dsn: s.DSNList(),
+	}, nil
+}
+
+func (s *Service) LatestSnapshot(ctx context.Context, req *sqlv1.LatestSnapshotRequest) (*sqlv1.LatestSnapshotResponse, error) {
+	db, ok := s.DBProvider(req.ReplicationId)
+	if !ok {
+		return nil, fmt.Errorf("database with replication id %q not found", req.ReplicationId)
+	}
+	sequence, reader, err := db.LatestSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	return &sqlv1.LatestSnapshotResponse{
+		Sequence: sequence,
+		Data:     data,
+	}, nil
+
+}
+
+func (s *Service) ReplicationIDs(ctx context.Context, req *sqlv1.ReplicationIDsRequest) (*sqlv1.ReplicationIDsResponse, error) {
+	return &sqlv1.ReplicationIDsResponse{
+		ReplicationId: s.ReplicationIDList(),
+	}, nil
 }
 
 func query(ctx context.Context, ex execQuerier, query string, args ...any) *sqlv1.QueryResponse {

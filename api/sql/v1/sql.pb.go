@@ -368,6 +368,262 @@ func (x *Row) GetValues() []*anypb.Any {
 	return nil
 }
 
+type DataSourceNamesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataSourceNamesRequest) Reset() {
+	*x = DataSourceNamesRequest{}
+	mi := &file_sql_v1_sql_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataSourceNamesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataSourceNamesRequest) ProtoMessage() {}
+
+func (x *DataSourceNamesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sql_v1_sql_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataSourceNamesRequest.ProtoReflect.Descriptor instead.
+func (*DataSourceNamesRequest) Descriptor() ([]byte, []int) {
+	return file_sql_v1_sql_proto_rawDescGZIP(), []int{5}
+}
+
+type DataSourceNamesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dsn           []string               `protobuf:"bytes,1,rep,name=dsn,proto3" json:"dsn,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataSourceNamesResponse) Reset() {
+	*x = DataSourceNamesResponse{}
+	mi := &file_sql_v1_sql_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataSourceNamesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataSourceNamesResponse) ProtoMessage() {}
+
+func (x *DataSourceNamesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sql_v1_sql_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataSourceNamesResponse.ProtoReflect.Descriptor instead.
+func (*DataSourceNamesResponse) Descriptor() ([]byte, []int) {
+	return file_sql_v1_sql_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DataSourceNamesResponse) GetDsn() []string {
+	if x != nil {
+		return x.Dsn
+	}
+	return nil
+}
+
+type LatestSnapshotRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ReplicationId string                 `protobuf:"bytes,1,opt,name=replication_id,json=replicationId,proto3" json:"replication_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LatestSnapshotRequest) Reset() {
+	*x = LatestSnapshotRequest{}
+	mi := &file_sql_v1_sql_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LatestSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LatestSnapshotRequest) ProtoMessage() {}
+
+func (x *LatestSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sql_v1_sql_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LatestSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*LatestSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_sql_v1_sql_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *LatestSnapshotRequest) GetReplicationId() string {
+	if x != nil {
+		return x.ReplicationId
+	}
+	return ""
+}
+
+type LatestSnapshotResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LatestSnapshotResponse) Reset() {
+	*x = LatestSnapshotResponse{}
+	mi := &file_sql_v1_sql_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LatestSnapshotResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LatestSnapshotResponse) ProtoMessage() {}
+
+func (x *LatestSnapshotResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sql_v1_sql_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LatestSnapshotResponse.ProtoReflect.Descriptor instead.
+func (*LatestSnapshotResponse) Descriptor() ([]byte, []int) {
+	return file_sql_v1_sql_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *LatestSnapshotResponse) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *LatestSnapshotResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type ReplicationIDsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicationIDsRequest) Reset() {
+	*x = ReplicationIDsRequest{}
+	mi := &file_sql_v1_sql_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicationIDsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicationIDsRequest) ProtoMessage() {}
+
+func (x *ReplicationIDsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sql_v1_sql_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicationIDsRequest.ProtoReflect.Descriptor instead.
+func (*ReplicationIDsRequest) Descriptor() ([]byte, []int) {
+	return file_sql_v1_sql_proto_rawDescGZIP(), []int{9}
+}
+
+type ReplicationIDsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ReplicationId []string               `protobuf:"bytes,1,rep,name=replication_id,json=replicationId,proto3" json:"replication_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicationIDsResponse) Reset() {
+	*x = ReplicationIDsResponse{}
+	mi := &file_sql_v1_sql_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicationIDsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicationIDsResponse) ProtoMessage() {}
+
+func (x *ReplicationIDsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sql_v1_sql_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicationIDsResponse.ProtoReflect.Descriptor instead.
+func (*ReplicationIDsResponse) Descriptor() ([]byte, []int) {
+	return file_sql_v1_sql_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ReplicationIDsResponse) GetReplicationId() []string {
+	if x != nil {
+		return x.ReplicationId
+	}
+	return nil
+}
+
 var File_sql_v1_sql_proto protoreflect.FileDescriptor
 
 const file_sql_v1_sql_proto_rawDesc = "" +
@@ -394,12 +650,26 @@ const file_sql_v1_sql_proto_rawDesc = "" +
 	"\acolumns\x18\x01 \x03(\tR\acolumns\x12\x1f\n" +
 	"\x04rows\x18\x02 \x03(\v2\v.sql.v1.RowR\x04rows\"3\n" +
 	"\x03Row\x12,\n" +
-	"\x06values\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\x06values*<\n" +
+	"\x06values\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\x06values\"\x18\n" +
+	"\x16DataSourceNamesRequest\"+\n" +
+	"\x17DataSourceNamesResponse\x12\x10\n" +
+	"\x03dsn\x18\x01 \x03(\tR\x03dsn\">\n" +
+	"\x15LatestSnapshotRequest\x12%\n" +
+	"\x0ereplication_id\x18\x01 \x01(\tR\rreplicationId\"H\n" +
+	"\x16LatestSnapshotResponse\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\x17\n" +
+	"\x15ReplicationIDsRequest\"?\n" +
+	"\x16ReplicationIDsResponse\x12%\n" +
+	"\x0ereplication_id\x18\x01 \x03(\tR\rreplicationId*<\n" +
 	"\tQueryType\x12\x1a\n" +
 	"\x16QUERY_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
-	"\x0fQUERY_TYPE_EXEC\x10\x012M\n" +
+	"\x0fQUERY_TYPE_EXEC\x10\x012\xc9\x02\n" +
 	"\x0fDatabaseService\x12:\n" +
-	"\x05Query\x12\x14.sql.v1.QueryRequest\x1a\x15.sql.v1.QueryResponse\"\x00(\x010\x01B+Z)github.com/litesql/go-ha/api/sql/v1;sqlv1b\x06proto3"
+	"\x05Query\x12\x14.sql.v1.QueryRequest\x1a\x15.sql.v1.QueryResponse\"\x00(\x010\x01\x12T\n" +
+	"\x0fDataSourceNames\x12\x1e.sql.v1.DataSourceNamesRequest\x1a\x1f.sql.v1.DataSourceNamesResponse\"\x00\x12Q\n" +
+	"\x0eLatestSnapshot\x12\x1d.sql.v1.LatestSnapshotRequest\x1a\x1e.sql.v1.LatestSnapshotResponse\"\x00\x12Q\n" +
+	"\x0eReplicationIDs\x12\x1d.sql.v1.ReplicationIDsRequest\x1a\x1e.sql.v1.ReplicationIDsResponse\"\x00B+Z)github.com/litesql/go-ha/api/sql/v1;sqlv1b\x06proto3"
 
 var (
 	file_sql_v1_sql_proto_rawDescOnce sync.Once
@@ -414,30 +684,42 @@ func file_sql_v1_sql_proto_rawDescGZIP() []byte {
 }
 
 var file_sql_v1_sql_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_sql_v1_sql_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_sql_v1_sql_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_sql_v1_sql_proto_goTypes = []any{
-	(QueryType)(0),        // 0: sql.v1.QueryType
-	(*QueryRequest)(nil),  // 1: sql.v1.QueryRequest
-	(*NamedValue)(nil),    // 2: sql.v1.NamedValue
-	(*QueryResponse)(nil), // 3: sql.v1.QueryResponse
-	(*Data)(nil),          // 4: sql.v1.Data
-	(*Row)(nil),           // 5: sql.v1.Row
-	(*anypb.Any)(nil),     // 6: google.protobuf.Any
+	(QueryType)(0),                  // 0: sql.v1.QueryType
+	(*QueryRequest)(nil),            // 1: sql.v1.QueryRequest
+	(*NamedValue)(nil),              // 2: sql.v1.NamedValue
+	(*QueryResponse)(nil),           // 3: sql.v1.QueryResponse
+	(*Data)(nil),                    // 4: sql.v1.Data
+	(*Row)(nil),                     // 5: sql.v1.Row
+	(*DataSourceNamesRequest)(nil),  // 6: sql.v1.DataSourceNamesRequest
+	(*DataSourceNamesResponse)(nil), // 7: sql.v1.DataSourceNamesResponse
+	(*LatestSnapshotRequest)(nil),   // 8: sql.v1.LatestSnapshotRequest
+	(*LatestSnapshotResponse)(nil),  // 9: sql.v1.LatestSnapshotResponse
+	(*ReplicationIDsRequest)(nil),   // 10: sql.v1.ReplicationIDsRequest
+	(*ReplicationIDsResponse)(nil),  // 11: sql.v1.ReplicationIDsResponse
+	(*anypb.Any)(nil),               // 12: google.protobuf.Any
 }
 var file_sql_v1_sql_proto_depIdxs = []int32{
-	0, // 0: sql.v1.QueryRequest.type:type_name -> sql.v1.QueryType
-	2, // 1: sql.v1.QueryRequest.params:type_name -> sql.v1.NamedValue
-	6, // 2: sql.v1.NamedValue.value:type_name -> google.protobuf.Any
-	4, // 3: sql.v1.QueryResponse.result_set:type_name -> sql.v1.Data
-	5, // 4: sql.v1.Data.rows:type_name -> sql.v1.Row
-	6, // 5: sql.v1.Row.values:type_name -> google.protobuf.Any
-	1, // 6: sql.v1.DatabaseService.Query:input_type -> sql.v1.QueryRequest
-	3, // 7: sql.v1.DatabaseService.Query:output_type -> sql.v1.QueryResponse
-	7, // [7:8] is the sub-list for method output_type
-	6, // [6:7] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	0,  // 0: sql.v1.QueryRequest.type:type_name -> sql.v1.QueryType
+	2,  // 1: sql.v1.QueryRequest.params:type_name -> sql.v1.NamedValue
+	12, // 2: sql.v1.NamedValue.value:type_name -> google.protobuf.Any
+	4,  // 3: sql.v1.QueryResponse.result_set:type_name -> sql.v1.Data
+	5,  // 4: sql.v1.Data.rows:type_name -> sql.v1.Row
+	12, // 5: sql.v1.Row.values:type_name -> google.protobuf.Any
+	1,  // 6: sql.v1.DatabaseService.Query:input_type -> sql.v1.QueryRequest
+	6,  // 7: sql.v1.DatabaseService.DataSourceNames:input_type -> sql.v1.DataSourceNamesRequest
+	8,  // 8: sql.v1.DatabaseService.LatestSnapshot:input_type -> sql.v1.LatestSnapshotRequest
+	10, // 9: sql.v1.DatabaseService.ReplicationIDs:input_type -> sql.v1.ReplicationIDsRequest
+	3,  // 10: sql.v1.DatabaseService.Query:output_type -> sql.v1.QueryResponse
+	7,  // 11: sql.v1.DatabaseService.DataSourceNames:output_type -> sql.v1.DataSourceNamesResponse
+	9,  // 12: sql.v1.DatabaseService.LatestSnapshot:output_type -> sql.v1.LatestSnapshotResponse
+	11, // 13: sql.v1.DatabaseService.ReplicationIDs:output_type -> sql.v1.ReplicationIDsResponse
+	10, // [10:14] is the sub-list for method output_type
+	6,  // [6:10] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_sql_v1_sql_proto_init() }
@@ -451,7 +733,7 @@ func file_sql_v1_sql_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sql_v1_sql_proto_rawDesc), len(file_sql_v1_sql_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

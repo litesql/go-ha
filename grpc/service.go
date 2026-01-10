@@ -16,9 +16,10 @@ import (
 
 type Service struct {
 	sqlv1.UnimplementedDatabaseServiceServer
-	DBProvider        DBProvider
-	DSNList           DataSourceNamesFn
-	ReplicationIDList ReplicationIDsFn
+	DBProvider         DBProvider
+	DSNList            DataSourceNamesFn
+	ReplicationIDList  ReplicationIDsFn
+	SQLExpectResultSet SQLExpectResultSetFn
 }
 
 type HADB interface {
@@ -31,6 +32,7 @@ type DBProvider func(id string) (HADB, bool)
 
 type DataSourceNamesFn func() []string
 type ReplicationIDsFn func() []string
+type SQLExpectResultSetFn func(context.Context, string) (bool, error)
 
 type execQuerier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -43,6 +45,10 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 		db   *sql.DB
 		tx   *sql.Tx
 	)
+	if list := s.ReplicationIDList(); len(list) == 1 {
+		hadb, _ = s.DBProvider(list[0])
+		db = hadb.DB()
+	}
 	defer func() {
 		if tx != nil {
 			tx.Rollback()
@@ -180,58 +186,86 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 				}
 			}
 
-			if req.Type == sqlv1.QueryType_QUERY_TYPE_UNSPECIFIED {
-				resp := query(stream.Context(), ex, sqlQuery, args...)
-				resp.Txseq = hadb.PubSeq()
-				err := stream.Send(resp)
+			switch req.Type {
+			case sqlv1.QueryType_QUERY_TYPE_EXEC_QUERY:
+				err := s.execQuery(stream, hadb, ex, sqlQuery, args)
 				if err != nil {
 					return err
 				}
-				continue
-			} else {
-				res, err := ex.ExecContext(stream.Context(), sqlQuery, args...)
-				if err != nil {
-					err := stream.Send(&sqlv1.QueryResponse{
-						Error: err.Error(),
-					})
-					if err != nil {
-						return err
-					}
-					continue
-				}
-				lastInsertID, err := res.LastInsertId()
-				if err != nil {
-					err := stream.Send(&sqlv1.QueryResponse{
-						Error: err.Error(),
-					})
-					if err != nil {
-						return err
-					}
-					continue
-				}
-
-				rowsAffected, err := res.RowsAffected()
-				if err != nil {
-					err := stream.Send(&sqlv1.QueryResponse{
-						Error: err.Error(),
-					})
-					if err != nil {
-						return err
-					}
-					continue
-				}
-
-				err = stream.Send(&sqlv1.QueryResponse{
-					LastInsertId: lastInsertID,
-					RowsAffected: rowsAffected,
-					Txseq:        hadb.PubSeq(),
-				})
+			case sqlv1.QueryType_QUERY_TYPE_EXEC_UPDATE:
+				err := s.execUpdate(stream, hadb, ex, sqlQuery, args)
 				if err != nil {
 					return err
 				}
+			default:
+				expectResultSet, err := s.SQLExpectResultSet(stream.Context(), sqlQuery)
+				if err != nil {
+					err := stream.Send(&sqlv1.QueryResponse{
+						Error: err.Error(),
+					})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				if expectResultSet {
+					err = s.execQuery(stream, hadb, ex, sqlQuery, args)
+					if err != nil {
+						return err
+					}
+				} else {
+					err = s.execUpdate(stream, hadb, ex, sqlQuery, args)
+					if err != nil {
+						return err
+					}
+				}
+
 			}
 		}
 	}
+}
+
+func (s *Service) execQuery(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
+	res, err := ex.ExecContext(stream.Context(), sqlQuery, args...)
+	if err != nil {
+		err := stream.Send(&sqlv1.QueryResponse{
+			Error: err.Error(),
+		})
+		if err != nil {
+			return err
+		}
+	}
+	lastInsertID, err := res.LastInsertId()
+	if err != nil {
+		err := stream.Send(&sqlv1.QueryResponse{
+			Error: err.Error(),
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		err := stream.Send(&sqlv1.QueryResponse{
+			Error: err.Error(),
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return stream.Send(&sqlv1.QueryResponse{
+		LastInsertId: lastInsertID,
+		RowsAffected: rowsAffected,
+		Txseq:        hadb.PubSeq(),
+	})
+}
+
+func (s *Service) execUpdate(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
+	resp := query(stream.Context(), ex, sqlQuery, args...)
+	resp.Txseq = hadb.PubSeq()
+	return stream.Send(resp)
 }
 
 func (s *Service) DataSourceNames(ctx context.Context, req *sqlv1.DataSourceNamesRequest) (*sqlv1.DataSourceNamesResponse, error) {

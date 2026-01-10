@@ -15,7 +15,8 @@ service DatabaseService {
 
 enum QueryType {
   QUERY_TYPE_UNSPECIFIED = 0;
-  QUERY_TYPE_EXEC = 1;
+  QUERY_TYPE_EXEC_UPDATE = 1;
+  QUERY_TYPE_EXEC_QUERY = 2;
 }
 
 message QueryRequest {

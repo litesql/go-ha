@@ -65,6 +65,12 @@ func TestStatement(t *testing.T) {
 			sql:      "SELECT * FROM user where name = ';'; DELETE FROM user WHERE id = 1;",
 			hasError: true,
 		},
+		/*FIXME
+		"dbeaver query": {
+			sql:      "select sql from sqlite_schema where lower(name) = lower('Genre')",
+			hasError: false,
+		},
+		*/
 	}
 
 	for name, tc := range tests {

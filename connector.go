@@ -286,6 +286,14 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 				},
 				DSNList:           ListDSN,
 				ReplicationIDList: ListReplicationIDs,
+				SQLExpectResultSet: func(ctx context.Context, sql string) (bool, error) {
+					stmt, err := ParseStatement(ctx, sql)
+					if err != nil {
+						return false, err
+					}
+					expectResultSet := stmt.HasReturning() || stmt.IsSelect() || stmt.IsExplain()
+					return expectResultSet, nil
+				},
 			})
 			slog.Info("gRPC server listening", "addr", lis.Addr())
 			go func() {

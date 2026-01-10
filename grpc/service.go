@@ -228,31 +228,22 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 func (s *Service) execQuery(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
 	res, err := ex.ExecContext(stream.Context(), sqlQuery, args...)
 	if err != nil {
-		err := stream.Send(&sqlv1.QueryResponse{
+		return stream.Send(&sqlv1.QueryResponse{
 			Error: err.Error(),
 		})
-		if err != nil {
-			return err
-		}
 	}
 	lastInsertID, err := res.LastInsertId()
 	if err != nil {
-		err := stream.Send(&sqlv1.QueryResponse{
+		return stream.Send(&sqlv1.QueryResponse{
 			Error: err.Error(),
 		})
-		if err != nil {
-			return err
-		}
 	}
 
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		err := stream.Send(&sqlv1.QueryResponse{
+		return stream.Send(&sqlv1.QueryResponse{
 			Error: err.Error(),
 		})
-		if err != nil {
-			return err
-		}
 	}
 
 	return stream.Send(&sqlv1.QueryResponse{

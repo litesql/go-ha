@@ -226,6 +226,14 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 }
 
 func (s *Service) execQuery(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
+	slog.Debug("Executing query...........", "sql", sqlQuery)
+	resp := query(stream.Context(), ex, sqlQuery, args...)
+	resp.Txseq = hadb.PubSeq()
+	return stream.Send(resp)
+}
+
+func (s *Service) execUpdate(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
+	slog.Debug("Executing update...........", "sql", sqlQuery)
 	res, err := ex.ExecContext(stream.Context(), sqlQuery, args...)
 	if err != nil {
 		return stream.Send(&sqlv1.QueryResponse{
@@ -251,12 +259,6 @@ func (s *Service) execQuery(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, 
 		RowsAffected: rowsAffected,
 		Txseq:        hadb.PubSeq(),
 	})
-}
-
-func (s *Service) execUpdate(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
-	resp := query(stream.Context(), ex, sqlQuery, args...)
-	resp.Txseq = hadb.PubSeq()
-	return stream.Send(resp)
 }
 
 func (s *Service) DataSourceNames(ctx context.Context, req *sqlv1.DataSourceNamesRequest) (*sqlv1.DataSourceNamesResponse, error) {

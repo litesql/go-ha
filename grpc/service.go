@@ -97,9 +97,8 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 		switch {
 		case strings.HasPrefix(upperSQL, "BEGIN"):
 			if tx != nil {
-				err := stream.Send(&sqlv1.QueryResponse{
-					Error: "trasaction already exists",
-				})
+				//NOOP
+				err = stream.Send(&sqlv1.QueryResponse{})
 				if err != nil {
 					return err
 				}
@@ -122,9 +121,8 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 			continue
 		case strings.HasPrefix(upperSQL, "COMMIT"):
 			if tx == nil {
-				err := stream.Send(&sqlv1.QueryResponse{
-					Error: "trasaction not exists",
-				})
+				//NOOP
+				err = stream.Send(&sqlv1.QueryResponse{})
 				if err != nil {
 					return err
 				}
@@ -147,9 +145,8 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 			continue
 		case strings.HasPrefix(upperSQL, "ROLLBACK"):
 			if tx == nil {
-				err := stream.Send(&sqlv1.QueryResponse{
-					Error: "trasaction not exists",
-				})
+				//NOOP
+				err = stream.Send(&sqlv1.QueryResponse{})
 				if err != nil {
 					return err
 				}

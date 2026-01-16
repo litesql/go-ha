@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/antlr4-go/antlr/v4"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/rqlite/sql"
 )
@@ -444,15 +443,4 @@ func parse(ctx context.Context, source string) ([]*Statement, error) {
 		statements = append(statements, stmt)
 	}
 	return statements, nil
-}
-
-type errorListener struct {
-	antlr.DefaultErrorListener
-	err error
-}
-
-func (d *errorListener) SyntaxError(_ antlr.Recognizer, _ any, line, column int, msg string, _ antlr.RecognitionException) {
-	if msg != "" {
-		d.err = fmt.Errorf("%d:%d: %s: %w", line, column, msg, ErrInvalidSQL)
-	}
 }

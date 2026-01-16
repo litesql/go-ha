@@ -151,14 +151,14 @@ func fullIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 		)
 		switch change.Operation {
 		case "INSERT":
-			sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
+			sql = fmt.Sprintf("REPLACE INTO %s (%s) VALUES (%s)", change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
 			_, err = tx.Exec(sql, change.NewValues...)
 		case "UPDATE":
 			setClause := make([]string, len(change.Columns))
 			for i, col := range change.Columns {
 				setClause[i] = fmt.Sprintf("%s = ?", col)
 			}
-			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(setClause, " AND "))
+			sql = fmt.Sprintf("UPDATE %s SET %s WHERE %s", change.Table, strings.Join(setClause, ", "), strings.Join(setClause, " AND "))
 			args := append(change.NewValues, change.OldValues...)
 			_, err = tx.Exec(sql, args...)
 		case "DELETE":
@@ -166,7 +166,7 @@ func fullIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 			for i, col := range change.Columns {
 				whereClause[i] = fmt.Sprintf("%s = ?", col)
 			}
-			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
+			sql = fmt.Sprintf("DELETE FROM %s WHERE %s", change.Table, strings.Join(whereClause, " AND "))
 			_, err = tx.Exec(sql, change.OldValues...)
 		case "SQL":
 			sql = change.Command
@@ -192,7 +192,7 @@ func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 		)
 		switch change.Operation {
 		case "INSERT":
-			sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
+			sql = fmt.Sprintf("REPLACE INTO %s (%s) VALUES (%s)", change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
 			_, err = tx.Exec(sql, change.NewValues...)
 		case "UPDATE":
 			setClause := make([]string, len(change.Columns))
@@ -204,7 +204,7 @@ func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 			for i, col := range pkColumns {
 				whereClause[i] = fmt.Sprintf("%s = ?", col)
 			}
-			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(whereClause, " AND "))
+			sql = fmt.Sprintf("UPDATE %s SET %s WHERE %s", change.Table, strings.Join(setClause, ", "), strings.Join(whereClause, " AND "))
 			args := append(change.NewValues, change.PKOldValues()...)
 			_, err = tx.Exec(sql, args...)
 		case "DELETE":
@@ -213,7 +213,7 @@ func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 			for i, col := range pkColumns {
 				whereClause[i] = fmt.Sprintf("%s = ?", col)
 			}
-			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
+			sql = fmt.Sprintf("DELETE FROM %s WHERE %s", change.Table, strings.Join(whereClause, " AND "))
 			_, err = tx.Exec(sql, change.PKOldValues()...)
 		case "SQL":
 			sql = change.Command
@@ -243,18 +243,18 @@ func rowidIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 			for i, col := range change.Columns {
 				setClause[i] = fmt.Sprintf("%s = ?%d", col, i+1)
 			}
-			sql = fmt.Sprintf("INSERT INTO %s.%s (%s, rowid) VALUES (%s) ON CONFLICT DO UPDATE SET %s, rowid = ?%d;", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)+1), strings.Join(setClause, ", "), len(change.NewValues)+1)
+			sql = fmt.Sprintf("INSERT INTO %s (%s, rowid) VALUES (%s) ON CONFLICT DO UPDATE SET %s, rowid = ?%d;", change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)+1), strings.Join(setClause, ", "), len(change.NewValues)+1)
 			_, err = tx.Exec(sql, append(change.NewValues, change.NewRowID)...)
 		case "UPDATE":
 			setClause := make([]string, len(change.Columns))
 			for i, col := range change.Columns {
 				setClause[i] = fmt.Sprintf("%s = ?", col)
 			}
-			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE rowid = ?;", change.Database, change.Table, strings.Join(setClause, ", "))
+			sql = fmt.Sprintf("UPDATE %s SET %s WHERE rowid = ?;", change.Table, strings.Join(setClause, ", "))
 			args := append(change.NewValues, change.OldRowID)
 			_, err = tx.Exec(sql, args...)
 		case "DELETE":
-			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE rowid = ?;", change.Database, change.Table)
+			sql = fmt.Sprintf("DELETE FROM %s WHERE rowid = ?;", change.Table)
 			_, err = tx.Exec(sql, change.OldRowID)
 		case "SQL":
 			sql = change.Command

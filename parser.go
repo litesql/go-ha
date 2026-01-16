@@ -307,7 +307,7 @@ func resultColumnsToString(resultColumns []*sql.ResultColumn) []string {
 }
 
 func (s *Statement) Source() string {
-	return s.source
+	return strings.TrimSuffix(s.source, ";") + ";"
 }
 
 func (s *Statement) Type() string {
@@ -384,7 +384,7 @@ func (s *Statement) Rollback() bool {
 
 func (s *Statement) SourceWithIfExists() string {
 	if s.hasIfExists || !s.ddl || s.typ == TypeAlterTable {
-		return s.source
+		return s.Source()
 	}
 	var ifExistsExpression string
 	if s.typ == TypeDrop {
@@ -393,11 +393,11 @@ func (s *Statement) SourceWithIfExists() string {
 		ifExistsExpression = "IF NOT EXISTS"
 	}
 	if s.hasModifier {
-		parts := strings.SplitN(s.source, " ", 4)
+		parts := strings.SplitN(s.Source(), " ", 4)
 		parts = append(parts[0:3], ifExistsExpression, parts[3])
 		return strings.Join(parts, " ")
 	}
-	parts := strings.SplitN(s.source, " ", 3)
+	parts := strings.SplitN(s.Source(), " ", 3)
 	parts = append(parts[0:2], ifExistsExpression, parts[2])
 	return strings.Join(parts, " ")
 }

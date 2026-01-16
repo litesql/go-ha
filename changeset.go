@@ -310,13 +310,15 @@ func (c Change) PKOldValues() []any {
 		return []any{c.OldRowID}
 	}
 	pkValues := make([]any, len(c.PKColumns))
-	pkIndex := 0
-	for i, col := range c.Columns {
-		if col == c.PKColumns[pkIndex] {
-			pkValues[pkIndex] = c.OldValues[i]
-			pkIndex++
-			if pkIndex >= len(c.PKColumns) {
-				break
+	if len(c.OldValues) == len(c.Columns) {
+		pkIndex := 0
+		for i, col := range c.Columns {
+			if col == c.PKColumns[pkIndex] {
+				pkValues[pkIndex] = c.OldValues[i]
+				pkIndex++
+				if pkIndex >= len(c.PKColumns) {
+					break
+				}
 			}
 		}
 	}
@@ -328,13 +330,15 @@ func (c Change) PKNewValues() []any {
 		return []any{c.NewRowID}
 	}
 	pkValues := make([]any, len(c.PKColumns))
-	pkIndex := 0
-	for i, col := range c.Columns {
-		if col == c.PKColumns[pkIndex] {
-			pkValues[pkIndex] = c.NewValues[i]
-			pkIndex++
-			if pkIndex >= len(c.PKColumns) {
-				break
+	if len(c.NewValues) == len(c.Columns) {
+		pkIndex := 0
+		for i, col := range c.Columns {
+			if col == c.PKColumns[pkIndex] {
+				pkValues[pkIndex] = c.NewValues[i]
+				pkIndex++
+				if pkIndex >= len(c.PKColumns) {
+					break
+				}
 			}
 		}
 	}

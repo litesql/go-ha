@@ -14,7 +14,7 @@ func TestStatement(t *testing.T) {
 		statement *Statement
 	}{
 		"select": {
-			sql:       "SELECT *, u.*, name as n  FROM user u",
+			sql:       "SELECT *, u.*, name as n  FROM `user`  u",
 			hasError:  false,
 			statement: &Statement{hasDistinct: false, columns: []string{"*", "u.*", "n"}},
 		},

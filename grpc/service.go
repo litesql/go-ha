@@ -119,7 +119,7 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 				return err
 			}
 			continue
-		case strings.HasPrefix(upperSQL, "COMMIT"):
+		case strings.HasPrefix(upperSQL, "COMMIT"), strings.HasPrefix(upperSQL, "END"):
 			if tx == nil {
 				//NOOP
 				err = stream.Send(&sqlv1.QueryResponse{})

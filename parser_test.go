@@ -14,9 +14,9 @@ func TestStatement(t *testing.T) {
 		statement *Statement
 	}{
 		"select": {
-			sql:       "SELECT * FROM user",
+			sql:       "SELECT *, u.*, name as n  FROM user u",
 			hasError:  false,
-			statement: &Statement{hasDistinct: false, columns: []string{"*"}},
+			statement: &Statement{hasDistinct: false, columns: []string{"*", "u.*", "n"}},
 		},
 		"bind named parameter": {
 			sql:       "SELECT * FROM user WHERE id = :id",
@@ -28,10 +28,10 @@ func TestStatement(t *testing.T) {
 			hasError:  false,
 			statement: &Statement{hasDistinct: false, columns: []string{"*"}, parameters: []string{"?", "?"}},
 		},
-		"bind positional $ parameter": {
-			sql:       "SELECT * FROM user WHERE id = $1 OR id = $2",
+		"bind positional ? parameter": {
+			sql:       "SELECT * FROM user WHERE id = ?1 OR id = ?2",
 			hasError:  false,
-			statement: &Statement{hasDistinct: false, columns: []string{"*"}, parameters: []string{"$1", "$2"}},
+			statement: &Statement{hasDistinct: false, columns: []string{"*"}, parameters: []string{"?1", "?2"}},
 		},
 		"explain": {
 			sql:       "EXPLAIN QUERY PLAN SELECT name FROM user WHERE id IN (SELECT DISTINCT user_id FROM orders)",
@@ -65,12 +65,11 @@ func TestStatement(t *testing.T) {
 			sql:      "SELECT * FROM user where name = ';'; DELETE FROM user WHERE id = 1;",
 			hasError: true,
 		},
-		/*FIXME
-		"dbeaver query": {
+
+		"dbeaver metadata query": {
 			sql:      "select sql from sqlite_schema where lower(name) = lower('Genre')",
 			hasError: false,
 		},
-		*/
 	}
 
 	for name, tc := range tests {
@@ -83,7 +82,7 @@ func TestStatement(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if tc.statement != nil && !tc.statement.equals(stmt) {
-				t.Fatalf("expected statement to be %v but got %v", tc.statement, stmt)
+				t.Fatalf("expected statement to be %+v but got %+v", tc.statement, stmt)
 			}
 		})
 	}

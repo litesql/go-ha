@@ -10,8 +10,7 @@ import (
 
 	"github.com/antlr4-go/antlr/v4"
 	lru "github.com/hashicorp/golang-lru/v2"
-
-	"github.com/litesql/go-ha/parser"
+	"github.com/rqlite/sql"
 )
 
 var (
@@ -40,6 +39,7 @@ const (
 	TypeRollback           = "ROLLBACK"
 	TypeSavepoint          = "SAVEPOINT"
 	TypeRelease            = "RELEASE"
+	TypePragma             = "PRAGMA"
 	TypeOther              = "OTHER"
 )
 
@@ -78,31 +78,52 @@ func UnverifiedStatement(source string, hasDistinct bool,
 	}
 }
 
-func ParseStatement(ctx context.Context, sql string) (*Statement, error) {
+func ParseStatement(ctx context.Context, source string) (*Statement, error) {
 	// PgWire Begin statement has a different syntax
-	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "BEGIN") {
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "BEGIN") {
 		return &Statement{
-			source:           sql,
+			source:           source,
 			typ:              TypeBegin,
 			modifiesDatabase: true,
 		}, nil
 	}
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "ATTACH ") {
+		return &Statement{
+			source:           source,
+			typ:              TypeOther,
+			modifiesDatabase: false,
+		}, nil
+	}
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "DETACH ") {
+		return &Statement{
+			source:           source,
+			typ:              TypeOther,
+			modifiesDatabase: false,
+		}, nil
+	}
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "VACUUM") {
+		return &Statement{
+			source:           source,
+			typ:              TypeOther,
+			modifiesDatabase: true,
+		}, nil
+	}
 
-	statements, ok := cache.Get(sql)
+	statements, ok := cache.Get(source)
 	if !ok {
 		var err error
-		statements, err = parse(ctx, sql)
+		statements, err = parse(ctx, source)
 		if err != nil {
 			return nil, err
 		}
-		cache.Add(sql, statements)
+		cache.Add(source, statements)
 	}
 	if len(statements) > 1 {
 		return nil, fmt.Errorf("multiple SQL statements are not allowed: %w", ErrInvalidSQL)
 	}
-	stmt := statements[0]
-	stmt.source = sql
-	return stmt, nil
+	result := statements[0]
+	result.source = source
+	return result, nil
 }
 
 func Parse(ctx context.Context, sql string) ([]*Statement, error) {
@@ -115,6 +136,174 @@ func Parse(ctx context.Context, sql string) ([]*Statement, error) {
 	}
 	cache.Add(sql, statements)
 	return statements, nil
+}
+
+func (s *Statement) Visit(n sql.Node) (w sql.Visitor, node sql.Node, err error) {
+	switch n.(type) {
+	case *sql.SelectStatement:
+		if s.selectDepth == 0 {
+			s.projectionFunctions = make(map[int]string)
+			s.limit = -1
+		}
+		s.selectDepth++
+	}
+	return s, n, nil
+}
+
+func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
+	switch n := n.(type) {
+	case *sql.SelectStatement:
+		s.selectDepth--
+		if s.selectDepth == 0 {
+			s.typ = TypeSelect
+			s.hasDistinct = n.Distinct.IsValid()
+			s.columns = resultColumnsToString(n.Columns)
+			s.projectionFunctions = make(map[int]string)
+			for i, col := range n.Columns {
+				if col.Expr == nil {
+					continue
+				}
+				text := col.Expr.String()
+				index := strings.LastIndex(text, "(")
+				if index > 0 {
+					fn := strings.ToUpper(text[0:index])
+					if slices.Contains(supportedProjectionFuncs, fn) {
+						s.projectionFunctions[i] = fn
+					}
+				}
+			}
+			s.orderBy = make([]string, 0)
+			for _, orderTerm := range n.OrderingTerms {
+				order := strings.ReplaceAll(orderTerm.X.String(), "\"", "")
+				if orderTerm.Desc.IsValid() {
+					order += " DESC"
+				}
+				s.orderBy = append(s.orderBy, order)
+			}
+			if n.Limit.IsValid() {
+				limit, err := strconv.Atoi(n.LimitExpr.String())
+				if err == nil {
+					s.limit = limit
+				}
+			}
+		}
+	case *sql.BindExpr:
+		s.parameters = append(s.parameters, n.Name)
+	case *sql.ExplainStatement:
+		s.columns = []string{"id", "parent", "notused", "detail"}
+		s.modifiesDatabase = false
+		s.typ = TypeExplain
+	case *sql.InsertStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeInsert
+		if n.ReturningClause != nil {
+			s.columns = resultColumnsToString(n.ReturningClause.Columns)
+			s.hasReturning = true
+		}
+	case *sql.DeleteStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeDelete
+		if n.ReturningClause != nil {
+			s.columns = resultColumnsToString(n.ReturningClause.Columns)
+			s.hasReturning = true
+		}
+	case *sql.UpdateStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeUpdate
+		if n.ReturningClause != nil {
+			s.columns = resultColumnsToString(n.ReturningClause.Columns)
+			s.hasReturning = true
+		}
+	case *sql.BeginStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeBegin
+	case *sql.CommitStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeCommit
+	case *sql.RollbackStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeRollback
+	case *sql.CreateTableStatement:
+		s.modifiesDatabase = true
+		s.ddl = true
+		s.hasIfExists = n.IfNotExists.IsValid()
+		s.typ = TypeCreateTable
+	case *sql.CreateIndexStatement:
+		s.modifiesDatabase = true
+		s.ddl = true
+		s.hasIfExists = n.IfNotExists.IsValid()
+		s.hasModifier = n.Unique.IsValid()
+		s.typ = TypeCreateIndex
+	case *sql.CreateTriggerStatement:
+		s.modifiesDatabase = true
+		s.ddl = true
+		s.hasModifier = n.Temp.IsValid()
+		s.hasIfExists = n.IfNotExists.IsValid()
+		s.typ = TypeCreateTrigger
+	case *sql.CreateViewStatement:
+		s.modifiesDatabase = true
+		s.ddl = true
+		//FIXME add TEMPORARY keyword to the parser
+		s.hasIfExists = n.IfNotExists.IsValid()
+		s.typ = TypeCreateView
+	case *sql.CreateVirtualTableStatement:
+		s.modifiesDatabase = true
+		s.hasIfExists = n.IfNotExists.IsValid()
+		s.hasModifier = true
+		s.typ = TypeCreateVirtualTable
+	case *sql.AlterTableStatement:
+		s.modifiesDatabase = true
+		s.ddl = true
+		s.typ = TypeAlterTable
+	case *sql.AnalyzeStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeAnalyze
+	case *sql.DropTableStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeDrop
+	case *sql.DropIndexStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeDrop
+	case *sql.DropTriggerStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeDrop
+	case *sql.DropViewStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeDrop
+	case *sql.PragmaStatement:
+		s.modifiesDatabase = false
+		if n.Expr != nil {
+			if strings.Contains(n.Expr.String(), "=") || strings.Contains(n.Expr.String(), "(") {
+				s.modifiesDatabase = true
+			}
+		}
+		s.typ = TypePragma
+	case *sql.SavepointStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeSavepoint
+	case *sql.ReleaseStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeRelease
+	default:
+		s.typ = TypeOther
+	}
+	return n, nil
+}
+
+func resultColumnsToString(resultColumns []*sql.ResultColumn) []string {
+	columns := make([]string, len(resultColumns))
+	for i, col := range resultColumns {
+		if col.Alias != nil {
+			columns[i] = col.Alias.Name
+			continue
+		}
+		if col.Star.IsValid() {
+			columns[i] = "*"
+			continue
+		}
+		columns[i] = strings.ReplaceAll(col.Expr.String(), `"`, "")
+	}
+	return columns
 }
 
 func (s *Statement) Source() string {
@@ -221,12 +410,15 @@ func (s *Statement) equals(other *Statement) bool {
 	if s == nil || other == nil {
 		return s == other
 	}
+
 	if slices.Compare(s.columns, other.columns) != 0 {
 		return false
 	}
+
 	if slices.Compare(s.parameters, other.parameters) != 0 {
 		return false
 	}
+
 	if s.hasDistinct != other.hasDistinct {
 		return false
 	}
@@ -236,24 +428,22 @@ func (s *Statement) equals(other *Statement) bool {
 
 func parse(ctx context.Context, source string) ([]*Statement, error) {
 	slog.DebugContext(ctx, "Parse", "sql", source)
-	input := antlr.NewInputStream(source)
-	lexer := parser.NewSQLiteLexer(input)
-	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
-	p := parser.NewSQLiteParser(stream)
-	p.RemoveErrorListeners()
-	listener := sqlListener{
-		input: input,
+	p := sql.NewParser(strings.NewReader(source))
+	parsed, err := p.ParseStatements()
+	if err != nil {
+		return nil, err
 	}
-	p.AddParseListener(&listener)
-	var errorListener errorListener
-	p.AddErrorListener(&errorListener)
-	p.Parse()
-	if errorListener.err != nil {
-		slog.ErrorContext(ctx, "Parse error", "error", errorListener.err, "sql", source)
-		return nil, errorListener.err
+	var statements []*Statement
+	for _, query := range parsed {
+		stmt := &Statement{}
+		node, err := sql.Walk(stmt, query)
+		if err != nil {
+			return nil, err
+		}
+		stmt.source = node.String()
+		statements = append(statements, stmt)
 	}
-
-	return listener.statements, nil
+	return statements, nil
 }
 
 type errorListener struct {
@@ -265,265 +455,4 @@ func (d *errorListener) SyntaxError(_ antlr.Recognizer, _ any, line, column int,
 	if msg != "" {
 		d.err = fmt.Errorf("%d:%d: %s: %w", line, column, msg, ErrInvalidSQL)
 	}
-}
-
-type sqlListener struct {
-	parser.BaseSQLiteParserListener
-	input       *antlr.InputStream
-	statements  []*Statement
-	current     int
-	sourceIndex int
-}
-
-func (s *sqlListener) ExitExpr_base(ctx *parser.Expr_baseContext) {
-	if ctx.BIND_PARAMETER() != nil {
-		if !slices.Contains(s.statement().parameters, ctx.GetText()) || ctx.GetText() == "?" {
-			s.statement().parameters = append(s.statement().parameters, ctx.GetText())
-		}
-	}
-}
-
-func (s *sqlListener) ExitSelect_stmt(c *parser.Select_stmtContext) {
-	if c.AllSelect_core() != nil && len(c.AllSelect_core()) > 0 {
-		mainSelect := c.AllSelect_core()[0]
-		if mainSelect.DISTINCT_() != nil {
-			s.statement().hasDistinct = true
-		} else {
-			s.statement().hasDistinct = false
-		}
-
-		s.statement().columns = make([]string, 0)
-		s.statement().projectionFunctions = make(map[int]string)
-		for i, col := range mainSelect.AllResult_column() {
-			if col.Expr() != nil {
-				exp := col.Expr().GetText()
-				index := strings.LastIndex(exp, "(")
-				if index > 0 {
-					fn := strings.ToUpper(exp[0:index])
-					if slices.Contains(supportedProjectionFuncs, fn) {
-						s.statement().projectionFunctions[i] = fn
-					}
-				}
-			}
-			if col.Column_alias() != nil {
-				s.statement().columns = append(s.statement().columns, col.Column_alias().GetText())
-				continue
-			}
-			s.statement().columns = append(s.statement().columns, col.GetText())
-		}
-	}
-}
-
-func (s *sqlListener) EnterSql_stmt(c *parser.Sql_stmtContext) {
-	s.statements = append(s.statements, &Statement{
-		projectionFunctions: make(map[int]string),
-		limit:               -1,
-	})
-}
-
-func (s *sqlListener) statement() *Statement {
-	return s.statements[s.current]
-}
-
-func (s *sqlListener) EnterSelect_core(ctx *parser.Select_coreContext) {
-	s.statement().selectDepth++
-}
-
-func (s *sqlListener) ExitSelect_core(ctx *parser.Select_coreContext) {
-	s.statement().selectDepth--
-}
-
-func (s *sqlListener) ExitSql_stmt(c *parser.Sql_stmtContext) {
-	defer func() {
-		s.current++
-	}()
-
-	s.statement().source = s.input.GetText(s.sourceIndex, s.input.Index())
-	s.sourceIndex = s.input.Index() + 1
-
-	if c.EXPLAIN_() != nil {
-		s.statement().typ = TypeExplain
-		s.statement().columns = []string{"id", "parent", "notused", "detail"}
-		return
-	}
-	switch {
-	case c.Select_stmt() != nil:
-		s.statement().typ = TypeSelect
-	case c.Insert_stmt() != nil:
-		s.statement().typ = TypeInsert
-		s.statement().hasReturning = c.Insert_stmt().Returning_clause() != nil
-	case c.Update_stmt() != nil:
-		s.statement().typ = TypeUpdate
-		s.statement().hasReturning = c.Update_stmt().Returning_clause() != nil
-	case c.Delete_stmt() != nil:
-		s.statement().typ = TypeDelete
-		s.statement().hasReturning = c.Delete_stmt().Returning_clause() != nil
-	case c.Begin_stmt() != nil:
-		s.statement().typ = TypeBegin
-	case c.Commit_stmt() != nil:
-		s.statement().typ = TypeCommit
-	case c.Rollback_stmt() != nil:
-		s.statement().typ = TypeRollback
-	case c.Create_table_stmt() != nil:
-		s.statement().typ = TypeCreateTable
-	case c.Create_index_stmt() != nil:
-		s.statement().typ = TypeCreateIndex
-	case c.Create_trigger_stmt() != nil:
-		s.statement().typ = TypeCreateTrigger
-	case c.Create_view_stmt() != nil:
-		s.statement().typ = TypeCreateView
-	case c.Create_virtual_table_stmt() != nil:
-		s.statement().typ = TypeCreateVirtualTable
-	case c.Alter_table_stmt() != nil:
-		s.statement().typ = TypeAlterTable
-	case c.Vacuum_stmt() != nil:
-		s.statement().typ = TypeVacuum
-	case c.Drop_stmt() != nil:
-		s.statement().typ = TypeDrop
-	case c.Analyze_stmt() != nil:
-		s.statement().typ = TypeAnalyze
-	case c.Savepoint_stmt() != nil:
-		s.statement().typ = TypeSavepoint
-	case c.Release_stmt() != nil:
-		s.statement().typ = TypeRelease
-	default:
-		s.statement().typ = TypeOther
-	}
-}
-
-func (s *sqlListener) ExitReturning_clause(ctx *parser.Returning_clauseContext) {
-	s.statement().columns = make([]string, 0)
-	for _, col := range ctx.GetChildren() {
-		switch v := col.(type) {
-		case parser.IColumn_aliasContext:
-			s.statement().columns = append(s.statement().columns[0:len(s.statement().columns)-1], v.GetText())
-			continue
-		case parser.IExprContext:
-			s.statement().columns = append(s.statement().columns, v.GetText())
-		}
-	}
-
-	if len(ctx.AllSTAR()) > 0 {
-		for _, col := range ctx.AllSTAR() {
-			s.statement().columns = append(s.statement().columns, col.GetText())
-		}
-		return
-	}
-}
-
-func (s *sqlListener) ExitOrder_clause(ctx *parser.Order_clauseContext) {
-	if s.statement().selectDepth != 0 {
-		return
-	}
-
-	s.statement().orderBy = make([]string, 0)
-	for _, term := range ctx.AllOrdering_term() {
-		exp := term.Expr().GetText()
-		if ascDesc := term.Asc_desc(); ascDesc != nil && ascDesc.DESC_() != nil {
-			exp += " DESC"
-		}
-		s.statement().orderBy = append(s.statement().orderBy, exp)
-	}
-}
-
-func (s *sqlListener) ExitLimit_clause(ctx *parser.Limit_clauseContext) {
-	if s.statement().selectDepth != 0 {
-		return
-	}
-
-	if len(ctx.AllExpr()) > 0 {
-		exp := ctx.Expr(0)
-		if limit, err := strconv.Atoi(exp.GetText()); err == nil {
-			s.statement().limit = limit
-		}
-	}
-}
-
-func (s *sqlListener) ExitCreate_table_stmt(ctx *parser.Create_table_stmtContext) {
-	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
-	s.statement().ddl = true
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitCreate_index_stmt(ctx *parser.Create_index_stmtContext) {
-	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
-	s.statement().hasModifier = ctx.UNIQUE_() != nil
-	s.statement().ddl = true
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitCreate_trigger_stmt(ctx *parser.Create_trigger_stmtContext) {
-	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
-	s.statement().hasModifier = ctx.TEMPORARY_() != nil || ctx.TEMP_() != nil
-	s.statement().ddl = true
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitCreate_view_stmt(ctx *parser.Create_view_stmtContext) {
-	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
-	s.statement().hasModifier = ctx.TEMPORARY_() != nil || ctx.TEMP_() != nil
-	s.statement().ddl = true
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitCreate_virtual_table_stmt(ctx *parser.Create_virtual_table_stmtContext) {
-	s.statement().hasIfExists = ctx.IF_() != nil && ctx.NOT_() != nil && ctx.EXISTS_() != nil
-	s.statement().hasModifier = true
-	s.statement().ddl = true
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitAlter_table_stmt(ctx *parser.Alter_table_stmtContext) {
-	s.statement().ddl = true
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitDrop_stmt(ctx *parser.Drop_stmtContext) {
-	s.statement().hasIfExists = ctx.IF_() != nil && ctx.EXISTS_() != nil
-	s.statement().ddl = true
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitPragma_value(ctx *parser.Pragma_valueContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitInsert_stmt(ctx *parser.Insert_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitUpdate_stmt(ctx *parser.Update_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitDelete_stmt(ctx *parser.Delete_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitVacuum_stmt(ctx *parser.Vacuum_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitBegin_stmt(ctx *parser.Begin_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitCommit_stmt(ctx *parser.Commit_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitRollback_stmt(ctx *parser.Rollback_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitAnalyze_stmt(ctx *parser.Analyze_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitSavepoint_stmt(ctx *parser.Savepoint_stmtContext) {
-	s.statement().modifiesDatabase = true
-}
-
-func (s *sqlListener) ExitRelease_stmt(ctx *parser.Release_stmtContext) {
-	s.statement().modifiesDatabase = true
 }

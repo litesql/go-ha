@@ -37,7 +37,10 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 	if len(dbs) == 0 {
 		return nil, fmt.Errorf("no databases available to execute query based on queryRouter=%s", queryRouter.String())
 	}
-
+	rewrittenQuery, aggregateFunctions, newTempDerivedColumns, err := stmt.RewriteQueryToAggregate()
+	if err != nil {
+		return nil, fmt.Errorf("failed to rewrite query: %w", err)
+	}
 	//TODO create a worker pool
 	chErr := make(chan error, len(dbs))
 	chRows := make(chan driver.Rows, len(dbs))
@@ -46,7 +49,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 		var wg sync.WaitGroup
 		for _, db := range dbs {
 			wg.Go(func() {
-				rows, err := queryDB(ctx, db, stmt.Source(), args, driverConn)
+				rows, err := queryDB(ctx, db, rewrittenQuery, args, driverConn)
 				if err != nil {
 					chErr <- err
 					return
@@ -68,7 +71,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 		}
 	})
 
-	if (!stmt.HasDistinct() && len(stmt.OrderBy()) == 0 && len(stmt.ProjectionFunctions()) == 0) || len(dbs) < 2 {
+	if (!stmt.HasDistinct() && len(stmt.OrderBy()) == 0 && len(aggregateFunctions) == 0) || len(dbs) < 2 {
 		chValues := make(chan []driver.Value)
 		result := newStreamResults(chValues)
 		var nextErrs error
@@ -112,7 +115,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 		}
 		return result, nil
 	}
-	result := newBufferedResults(stmt.HasDistinct())
+	result := newBufferedResults(stmt.HasDistinct(), newTempDerivedColumns)
 	var nextErrs error
 	var shardsResultsCount int
 	for rows := range chRows {
@@ -139,7 +142,7 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 		return nil, errs
 	}
 	if shardsResultsCount > 1 {
-		if err := result.mergeAndSort(stmt.ProjectionFunctions(), stmt.OrderBy(), stmt.Limit()); err != nil {
+		if err := result.mergeAndSort(aggregateFunctions, stmt.OrderBy(), stmt.Limit()); err != nil {
 			return nil, err
 		}
 	}
@@ -195,15 +198,17 @@ func (r *streamResults) Next(dest []driver.Value) error {
 }
 
 type bufferedResults struct {
-	distinct bool
-	columns  []string
-	values   [][]driver.Value
-	index    int
+	distinct    bool
+	columns     []string
+	values      [][]driver.Value
+	index       int
+	tempColumns map[int]int
 }
 
-func newBufferedResults(distinct bool) *bufferedResults {
+func newBufferedResults(distinct bool, tempColumns map[int]int) *bufferedResults {
 	return &bufferedResults{
-		distinct: distinct,
+		distinct:    distinct,
+		tempColumns: tempColumns,
 	}
 }
 
@@ -306,10 +311,46 @@ func (r *bufferedResults) merge(funcs map[int]string) [][]driver.Value {
 			groupByValues[key] = newRow
 		}
 	}
+
+	if len(r.tempColumns) > 0 {
+		avgTempValues := make(map[int][2]int) // [0]count, [1]sum
+
+		for i := range r.tempColumns {
+			avgTempValues[i] = [2]int{0, 0}
+
+		}
+
+		//calculate AVG values
+		for _, row := range groupByValues {
+			for i, countCol := range r.tempColumns {
+				var count, sum float64
+				switch v := row[countCol].(type) {
+				case int64:
+					count = float64(v)
+				case float64:
+					count = v
+				}
+				switch v := row[countCol+1].(type) {
+				case int64:
+					sum = float64(v)
+				case float64:
+					sum = v
+				}
+				row[i] = sum / count
+			}
+		}
+
+		r.columns = r.columns[0 : len(r.columns)-2*len(r.tempColumns)]
+	}
+
 	values := make([][]driver.Value, len(groupByValues))
 	count := 0
 	for _, row := range groupByValues {
-		values[count] = row
+		if l := len(r.tempColumns); l > 0 {
+			values[count] = row[0 : len(row)-2*l]
+		} else {
+			values[count] = row
+		}
 		count++
 	}
 
@@ -404,6 +445,10 @@ func agregateStrategyFactory(typ string) aggregateStrategy {
 			default:
 				panic("invalid MAX aggregation type:" + fmt.Sprintf("%T", agg))
 			}
+		}
+	case "AVG":
+		return func(agg driver.Value, new driver.Value) driver.Value {
+			return new // will be calculated after
 		}
 	}
 	panic("usupported function: " + typ)

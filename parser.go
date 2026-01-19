@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ import (
 var (
 	ErrInvalidSQL            = fmt.Errorf("invalid SQL")
 	cache, _                 = lru.New[string, []*Statement](256)
-	supportedProjectionFuncs = []string{"COUNT", "SUM", "TOTAL", "MAX", "MIN"}
+	supportedProjectionFuncs = []string{"COUNT", "SUM", "TOTAL", "MAX", "MIN", "AVG"}
 )
 
 const (
@@ -43,20 +44,21 @@ const (
 )
 
 type Statement struct {
-	source              string
-	hasDistinct         bool
-	hasReturning        bool
-	typ                 string
-	parameters          []string
-	columns             []string
-	orderBy             []string
-	limit               int
-	ddl                 bool
-	hasIfExists         bool
-	hasModifier         bool
-	modifiesDatabase    bool
-	selectDepth         int
-	projectionFunctions map[int]string
+	source             string
+	hasDistinct        bool
+	hasReturning       bool
+	typ                string
+	parameters         []string
+	columns            []string
+	orderBy            []string
+	limit              int
+	ddl                bool
+	hasIfExists        bool
+	hasModifier        bool
+	modifiesDatabase   bool
+	selectDepth        int
+	aggregateFunctions map[int]string
+	node               sql.Node
 }
 
 func UnverifiedStatement(source string, hasDistinct bool,
@@ -141,7 +143,7 @@ func (s *Statement) Visit(n sql.Node) (w sql.Visitor, node sql.Node, err error) 
 	switch n.(type) {
 	case *sql.SelectStatement:
 		if s.selectDepth == 0 {
-			s.projectionFunctions = make(map[int]string)
+			s.aggregateFunctions = make(map[int]string)
 			s.limit = -1
 		}
 		s.selectDepth++
@@ -157,18 +159,18 @@ func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
 			s.typ = TypeSelect
 			s.hasDistinct = n.Distinct.IsValid()
 			s.columns = resultColumnsToString(n.Columns)
-			s.projectionFunctions = make(map[int]string)
+			s.aggregateFunctions = make(map[int]string)
 			for i, col := range n.Columns {
 				if col.Expr == nil {
 					continue
 				}
-				text := col.Expr.String()
-				index := strings.LastIndex(text, "(")
-				if index > 0 {
-					fn := strings.ToUpper(text[0:index])
-					if slices.Contains(supportedProjectionFuncs, fn) {
-						s.projectionFunctions[i] = fn
-					}
+				call, ok := col.Expr.(*sql.Call)
+				if !ok {
+					continue
+				}
+				fn := strings.ToUpper(call.Name.Name)
+				if slices.Contains(supportedProjectionFuncs, fn) {
+					s.aggregateFunctions[i] = fn
 				}
 			}
 			s.orderBy = make([]string, 0)
@@ -333,8 +335,8 @@ func (s *Statement) Limit() int {
 	return s.limit
 }
 
-func (s *Statement) ProjectionFunctions() map[int]string {
-	return s.projectionFunctions
+func (s *Statement) AggregateFunctions() map[int]string {
+	return s.aggregateFunctions
 }
 
 func (s *Statement) IsExplain() bool {
@@ -405,6 +407,42 @@ func (s *Statement) ModifiesDatabase() bool {
 	return s.modifiesDatabase
 }
 
+func (s *Statement) RewriteQueryToAggregate() (query string, aggregateFunctions map[int]string, newColumns map[int]int, err error) {
+	selectStatement, ok := s.node.(*sql.SelectStatement)
+	if !ok {
+		return s.source, nil, nil, nil
+	}
+	selectStatement = selectStatement.Clone()
+	newAggregateFunctions := make(map[int]string)
+	newColumns = make(map[int]int)
+	for i := range s.aggregateFunctions {
+		call, ok := selectStatement.Columns[i].Expr.(*sql.Call)
+		if !ok {
+			continue
+		}
+		if call.Name.Name != "avg" {
+			continue
+		}
+		count := call.Clone()
+		count.Name.Name = "count"
+		sum := call.Clone()
+		sum.Name.Name = "sum"
+		next := len(selectStatement.Columns)
+		newColumns[i] = next
+		newAggregateFunctions[next] = "COUNT"
+		newAggregateFunctions[next+1] = "SUM"
+		selectStatement.Columns = append(selectStatement.Columns, &sql.ResultColumn{
+			Expr: count,
+		})
+		selectStatement.Columns = append(selectStatement.Columns, &sql.ResultColumn{
+			Expr: sum,
+		})
+	}
+	aggregateFunctions = maps.Clone(s.aggregateFunctions)
+	maps.Copy(aggregateFunctions, newAggregateFunctions)
+	return selectStatement.String(), aggregateFunctions, newColumns, nil
+}
+
 func (s *Statement) equals(other *Statement) bool {
 	if s == nil || other == nil {
 		return s == other
@@ -439,6 +477,7 @@ func parse(ctx context.Context, source string) ([]*Statement, error) {
 		if err != nil {
 			return nil, err
 		}
+		stmt.node = node
 		stmt.source = node.String()
 		statements = append(statements, stmt)
 	}

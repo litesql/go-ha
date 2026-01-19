@@ -480,31 +480,35 @@ func TestOrderBy(t *testing.T) {
 	}
 }
 
-func TestProjectionFunctions(t *testing.T) {
+func TestAggregateFunctions(t *testing.T) {
 	tests := map[string]struct {
-		sql                 string
-		projectionFunctions map[int]string
+		sql                string
+		aggregateFunctions map[int]string
 	}{
 		"zero": {
-			sql:                 "SELECT * FROM user",
-			projectionFunctions: map[int]string{},
+			sql:                "SELECT * FROM user",
+			aggregateFunctions: map[int]string{},
 		},
 		"simple": {
 			sql: "SELECT count(*) FROM user",
-			projectionFunctions: map[int]string{
+			aggregateFunctions: map[int]string{
 				0: "COUNT",
 			},
 		},
 		"multiple": {
 			sql: "SELECT id, count(*), sum(salary) FROM user",
-			projectionFunctions: map[int]string{
+			aggregateFunctions: map[int]string{
 				1: "COUNT",
 				2: "SUM",
 			},
 		},
 		"subquery": {
-			sql:                 "SELECT id FROM user WHERE salary = (SELECT MAX(salary) FROM user) LIMIT 6 OFFSET 2",
-			projectionFunctions: map[int]string{},
+			sql:                "SELECT id FROM user WHERE salary = (SELECT MAX(salary) FROM user) LIMIT 6 OFFSET 2",
+			aggregateFunctions: map[int]string{},
+		},
+		"avg": {
+			sql:                "SELECT avg(salary) FROM employee",
+			aggregateFunctions: map[int]string{1: "AVG"},
 		},
 	}
 	for name, tc := range tests {
@@ -517,8 +521,9 @@ func TestProjectionFunctions(t *testing.T) {
 				t.Fatalf("expected statement to be not nil")
 				return
 			}
-			if !maps.Equal(stmt.ProjectionFunctions(), tc.projectionFunctions) {
-				t.Fatalf("expected projection functions to be %v but got %v", tc.projectionFunctions, stmt.ProjectionFunctions())
+			stmt.RewriteQueryToAggregate()
+			if !maps.Equal(stmt.AggregateFunctions(), tc.aggregateFunctions) {
+				t.Fatalf("expected aggregate functions to be %v but got %v", tc.aggregateFunctions, stmt.AggregateFunctions())
 			}
 		})
 	}

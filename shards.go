@@ -352,6 +352,7 @@ func (r *bufferedResults) merge(funcs map[int]*sqlparser.Call) [][]driver.Value 
 	count := 0
 	for _, row := range groupByValues {
 		if l := len(r.tempColumns); l > 0 {
+			// remove temp columns created to calculate AVG
 			values[count] = row[0 : len(row)-2*l]
 		} else {
 			values[count] = row
@@ -484,24 +485,37 @@ func (s *stringAggStrategy) apply(agg driver.Value, new driver.Value) driver.Val
 }
 
 type distinctStringAggStrategy struct {
-	sep string
+	sep    string
+	values []string
 }
 
 func (s *distinctStringAggStrategy) apply(agg driver.Value, new driver.Value) driver.Value {
 	if agg == nil {
+		if new != nil {
+			newValue, _ := new.(string)
+			s.values = strings.Split(newValue, s.sep)
+		}
 		return new
 	}
 	if new == nil {
+		if s.values == nil {
+			s.values = strings.Split(agg.(string), s.sep)
+		}
 		return agg
 	}
 	switch total := agg.(type) {
 	case string:
 		newValue, _ := new.(string)
-		values := strings.Split(total, s.sep)
-		if slices.Contains(values, newValue) {
-			return agg
+		newValues := strings.Split(newValue, s.sep)
+		result := total
+		for _, new := range newValues {
+			if slices.Contains(s.values, new) {
+				continue
+			}
+			s.values = append(s.values, new)
+			result = result + s.sep + new
 		}
-		return total + s.sep + newValue
+		return result
 	default:
 		panic("invalid STRING_AGG/GROUP_CONCAT aggregation type:" + fmt.Sprintf("%T", agg))
 	}

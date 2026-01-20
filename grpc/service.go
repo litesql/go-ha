@@ -93,6 +93,16 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 		}
 		sqlQuery := req.GetSql()
 		slog.Debug("gRPC service", "query", sqlQuery)
+
+		if db == nil {
+			err := stream.Send(&sqlv1.QueryResponse{
+				Error: fmt.Sprintf("database not selected, inform a replication_id: %v", s.ReplicationIDList()),
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		upperSQL := strings.ToUpper(sqlQuery)
 		switch {
 		case strings.HasPrefix(upperSQL, "BEGIN"):

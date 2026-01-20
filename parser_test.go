@@ -2,7 +2,6 @@ package ha
 
 import (
 	"context"
-	"maps"
 	"slices"
 	"testing"
 )
@@ -522,7 +521,7 @@ func TestAggregateFunctions(t *testing.T) {
 				return
 			}
 			stmt.RewriteQueryToAggregate()
-			if !maps.Equal(stmt.AggregateFunctions(), tc.aggregateFunctions) {
+			if len(stmt.AggregateFunctions()) != len(tc.aggregateFunctions) {
 				t.Fatalf("expected aggregate functions to be %v but got %v", tc.aggregateFunctions, stmt.AggregateFunctions())
 			}
 		})

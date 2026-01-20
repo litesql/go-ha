@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sqlparser "github.com/rqlite/sql"
 )
 
 type driverConnFunc func(*sql.Conn) (driver.QueryerContext, error)
@@ -141,11 +143,11 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 	if result.empty() && errs != nil {
 		return nil, errs
 	}
-	if shardsResultsCount > 1 {
-		if err := result.mergeAndSort(aggregateFunctions, stmt.OrderBy(), stmt.Limit()); err != nil {
-			return nil, err
-		}
+
+	if err := result.mergeAndSort(shardsResultsCount, aggregateFunctions, stmt.OrderBy(), stmt.Limit()); err != nil {
+		return nil, err
 	}
+
 	return result, nil
 }
 
@@ -255,7 +257,15 @@ func (r *bufferedResults) empty() bool {
 	return len(r.values) == 0
 }
 
-func (r *bufferedResults) mergeAndSort(funcs map[int]string, orderBy []string, limit int) error {
+func (r *bufferedResults) mergeAndSort(shards int, funcs map[int]*sqlparser.Call, orderBy []string, limit int) error {
+	if len(r.tempColumns) > 0 {
+		r.columns = r.columns[0 : len(r.columns)-2*len(r.tempColumns)]
+	}
+
+	if shards < 2 {
+		return nil
+	}
+
 	if len(funcs) > 0 {
 		r.values = r.merge(funcs)
 	}
@@ -275,7 +285,7 @@ func (r *bufferedResults) mergeAndSort(funcs map[int]string, orderBy []string, l
 	return nil
 }
 
-func (r *bufferedResults) merge(funcs map[int]string) [][]driver.Value {
+func (r *bufferedResults) merge(funcs map[int]*sqlparser.Call) [][]driver.Value {
 	if len(r.columns) == len(funcs) {
 		return r.values
 	}
@@ -304,7 +314,7 @@ func (r *bufferedResults) merge(funcs map[int]string) [][]driver.Value {
 		if row, ok := groupByValues[key]; ok {
 			for i, aggregateStrategy := range strategies {
 				agg := row[i]
-				row[i] = aggregateStrategy(agg, newRow[i])
+				row[i] = aggregateStrategy.apply(agg, newRow[i])
 			}
 			groupByValues[key] = row
 		} else {
@@ -313,13 +323,6 @@ func (r *bufferedResults) merge(funcs map[int]string) [][]driver.Value {
 	}
 
 	if len(r.tempColumns) > 0 {
-		avgTempValues := make(map[int][2]int) // [0]count, [1]sum
-
-		for i := range r.tempColumns {
-			avgTempValues[i] = [2]int{0, 0}
-
-		}
-
 		//calculate AVG values
 		for _, row := range groupByValues {
 			for i, countCol := range r.tempColumns {
@@ -336,11 +339,13 @@ func (r *bufferedResults) merge(funcs map[int]string) [][]driver.Value {
 				case float64:
 					sum = v
 				}
-				row[i] = sum / count
+				if count == 0 {
+					row[i] = 0
+				} else {
+					row[i] = sum / count
+				}
 			}
 		}
-
-		r.columns = r.columns[0 : len(r.columns)-2*len(r.tempColumns)]
 	}
 
 	values := make([][]driver.Value, len(groupByValues))
@@ -357,101 +362,176 @@ func (r *bufferedResults) merge(funcs map[int]string) [][]driver.Value {
 	return values
 }
 
-type aggregateStrategy func(agg driver.Value, new driver.Value) driver.Value
+type aggregateStrategy interface {
+	apply(agg driver.Value, new driver.Value) driver.Value
+}
 
-func agregateStrategyFactory(typ string) aggregateStrategy {
-	switch typ {
+type sumStrategy struct{}
+
+func (s *sumStrategy) apply(agg driver.Value, new driver.Value) driver.Value {
+	if agg == nil {
+		return new
+	}
+	if new == nil {
+		return agg
+	}
+	switch total := agg.(type) {
+	case int64:
+		newValue, _ := new.(int64)
+		return total + newValue
+	case float64:
+		newValue, _ := new.(float64)
+		return total + newValue
+	default:
+		panic("invalid COUNT/SUM/TOTAL aggregation type:" + fmt.Sprintf("%T", agg))
+	}
+}
+
+type minStrategy struct{}
+
+func (s *minStrategy) apply(agg driver.Value, new driver.Value) driver.Value {
+	if agg == nil {
+		return new
+	}
+	if new == nil {
+		return agg
+	}
+	switch x := agg.(type) {
+	case int64:
+		return min(x, new.(int64))
+	case float64:
+		return min(x, new.(float64))
+	case string:
+		return min(x, new.(string))
+	case time.Time:
+		y, _ := new.(time.Time)
+		res := x.Compare(y)
+		if res < 0 {
+			return x
+		}
+		return y
+	case []byte:
+		y, _ := new.([]byte)
+		res := bytes.Compare(x, y)
+		if res < 0 {
+			return x
+		}
+		return y
+	default:
+		panic("invalid MIN aggregation type:" + fmt.Sprintf("%T", agg))
+	}
+}
+
+type maxStrategy struct{}
+
+func (s *maxStrategy) apply(agg driver.Value, new driver.Value) driver.Value {
+	if agg == nil {
+		return new
+	}
+	if new == nil {
+		return agg
+	}
+	switch x := agg.(type) {
+	case int64:
+		return max(x, new.(int64))
+	case float64:
+		return max(x, new.(float64))
+	case string:
+		return max(x, new.(string))
+	case time.Time:
+		y, _ := new.(time.Time)
+		res := x.Compare(y)
+		if res > 0 {
+			return x
+		}
+		return y
+	case []byte:
+		y, _ := new.([]byte)
+		res := bytes.Compare(x, y)
+		if res > 0 {
+			return x
+		}
+		return y
+	default:
+		panic("invalid MAX aggregation type:" + fmt.Sprintf("%T", agg))
+	}
+}
+
+type avgStrategy struct{}
+
+func (s *avgStrategy) apply(agg driver.Value, new driver.Value) driver.Value {
+	return nil // will be calculated at the end
+}
+
+type stringAggStrategy struct {
+	sep string
+}
+
+func (s *stringAggStrategy) apply(agg driver.Value, new driver.Value) driver.Value {
+	if agg == nil {
+		return new
+	}
+	if new == nil {
+		return agg
+	}
+	switch total := agg.(type) {
+	case string:
+		newValue, _ := new.(string)
+		return total + s.sep + newValue
+	default:
+		panic("invalid STRING_AGG/GROUP_CONCAT aggregation type:" + fmt.Sprintf("%T", agg))
+	}
+}
+
+type distinctStringAggStrategy struct {
+	sep string
+}
+
+func (s *distinctStringAggStrategy) apply(agg driver.Value, new driver.Value) driver.Value {
+	if agg == nil {
+		return new
+	}
+	if new == nil {
+		return agg
+	}
+	switch total := agg.(type) {
+	case string:
+		newValue, _ := new.(string)
+		values := strings.Split(total, s.sep)
+		if slices.Contains(values, newValue) {
+			return agg
+		}
+		return total + s.sep + newValue
+	default:
+		panic("invalid STRING_AGG/GROUP_CONCAT aggregation type:" + fmt.Sprintf("%T", agg))
+	}
+}
+
+func agregateStrategyFactory(call *sqlparser.Call) aggregateStrategy {
+	switch strings.ToUpper(call.Name.Name) {
 	case "COUNT", "SUM", "TOTAL":
-		return func(agg driver.Value, new driver.Value) driver.Value {
-			if agg == nil {
-				return new
-			}
-			if new == nil {
-				return agg
-			}
-			switch total := agg.(type) {
-			case int64:
-				newValue, _ := new.(int64)
-				return total + newValue
-			case float64:
-				newValue, _ := new.(float64)
-				return total + newValue
-			default:
-				panic("invalid COUNT/SUM/TOTAL aggregation type:" + fmt.Sprintf("%T", agg))
-			}
-		}
+		return &sumStrategy{}
 	case "MIN":
-		return func(agg driver.Value, new driver.Value) driver.Value {
-			if agg == nil {
-				return new
-			}
-			if new == nil {
-				return agg
-			}
-			switch x := agg.(type) {
-			case int64:
-				return min(x, new.(int64))
-			case float64:
-				return min(x, new.(float64))
-			case string:
-				return min(x, new.(string))
-			case time.Time:
-				y, _ := new.(time.Time)
-				res := x.Compare(y)
-				if res < 0 {
-					return x
-				}
-				return y
-			case []byte:
-				y, _ := new.([]byte)
-				res := bytes.Compare(x, y)
-				if res < 0 {
-					return x
-				}
-				return y
-			default:
-				panic("invalid MIN aggregation type:" + fmt.Sprintf("%T", agg))
-			}
-		}
+		return &minStrategy{}
 	case "MAX":
-		return func(agg driver.Value, new driver.Value) driver.Value {
-			if agg == nil {
-				return new
-			}
-			if new == nil {
-				return agg
-			}
-			switch x := agg.(type) {
-			case int64:
-				return max(x, new.(int64))
-			case float64:
-				return max(x, new.(float64))
-			case string:
-				return max(x, new.(string))
-			case time.Time:
-				y, _ := new.(time.Time)
-				res := x.Compare(y)
-				if res > 0 {
-					return x
-				}
-				return y
-			case []byte:
-				y, _ := new.([]byte)
-				res := bytes.Compare(x, y)
-				if res > 0 {
-					return x
-				}
-				return y
-			default:
-				panic("invalid MAX aggregation type:" + fmt.Sprintf("%T", agg))
+		return &maxStrategy{}
+	case "AVG":
+		return &avgStrategy{}
+	case "STRING_AGG", "GROUP_CONCAT":
+		sep := ","
+		if len(call.Args) > 1 {
+			sep = call.Args[1].String()
+		}
+		if call.Distinct.IsValid() {
+			return &distinctStringAggStrategy{
+				sep: sep,
 			}
 		}
-	case "AVG":
-		return func(agg driver.Value, new driver.Value) driver.Value {
-			return new // will be calculated after
+		return &stringAggStrategy{
+			sep: sep,
 		}
 	}
-	panic("usupported function: " + typ)
+	panic("usupported aggregate function: " + call.Name.Name)
 }
 
 func rowKey(row []driver.Value, keyColumns []int) string {

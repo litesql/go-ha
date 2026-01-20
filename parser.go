@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	ErrInvalidSQL            = fmt.Errorf("invalid SQL")
-	cache, _                 = lru.New[string, []*Statement](256)
-	supportedProjectionFuncs = []string{"COUNT", "SUM", "TOTAL", "MAX", "MIN", "AVG"}
+	ErrInvalidSQL           = fmt.Errorf("invalid SQL")
+	cache, _                = lru.New[string, []*Statement](256)
+	supportedAggregateFuncs = []string{"COUNT", "SUM", "TOTAL", "MAX", "MIN", "AVG", "STRING_AGG", "GROUP_CONCAT"}
 )
 
 const (
@@ -57,7 +57,7 @@ type Statement struct {
 	hasModifier        bool
 	modifiesDatabase   bool
 	selectDepth        int
-	aggregateFunctions map[int]string
+	aggregateFunctions map[int]*sql.Call
 	node               sql.Node
 }
 
@@ -143,7 +143,7 @@ func (s *Statement) Visit(n sql.Node) (w sql.Visitor, node sql.Node, err error) 
 	switch n.(type) {
 	case *sql.SelectStatement:
 		if s.selectDepth == 0 {
-			s.aggregateFunctions = make(map[int]string)
+			s.aggregateFunctions = make(map[int]*sql.Call)
 			s.limit = -1
 		}
 		s.selectDepth++
@@ -159,7 +159,7 @@ func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
 			s.typ = TypeSelect
 			s.hasDistinct = n.Distinct.IsValid()
 			s.columns = resultColumnsToString(n.Columns)
-			s.aggregateFunctions = make(map[int]string)
+			s.aggregateFunctions = make(map[int]*sql.Call)
 			for i, col := range n.Columns {
 				if col.Expr == nil {
 					continue
@@ -169,8 +169,8 @@ func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
 					continue
 				}
 				fn := strings.ToUpper(call.Name.Name)
-				if slices.Contains(supportedProjectionFuncs, fn) {
-					s.aggregateFunctions[i] = fn
+				if slices.Contains(supportedAggregateFuncs, fn) {
+					s.aggregateFunctions[i] = call
 				}
 			}
 			s.orderBy = make([]string, 0)
@@ -335,7 +335,7 @@ func (s *Statement) Limit() int {
 	return s.limit
 }
 
-func (s *Statement) AggregateFunctions() map[int]string {
+func (s *Statement) AggregateFunctions() map[int]*sql.Call {
 	return s.aggregateFunctions
 }
 
@@ -407,13 +407,13 @@ func (s *Statement) ModifiesDatabase() bool {
 	return s.modifiesDatabase
 }
 
-func (s *Statement) RewriteQueryToAggregate() (query string, aggregateFunctions map[int]string, newColumns map[int]int, err error) {
+func (s *Statement) RewriteQueryToAggregate() (query string, aggregateFunctions map[int]*sql.Call, newColumns map[int]int, err error) {
 	selectStatement, ok := s.node.(*sql.SelectStatement)
 	if !ok {
 		return s.source, nil, nil, nil
 	}
 	selectStatement = selectStatement.Clone()
-	newAggregateFunctions := make(map[int]string)
+	newAggregateFunctions := make(map[int]*sql.Call)
 	newColumns = make(map[int]int)
 	for i := range s.aggregateFunctions {
 		call, ok := selectStatement.Columns[i].Expr.(*sql.Call)
@@ -429,8 +429,8 @@ func (s *Statement) RewriteQueryToAggregate() (query string, aggregateFunctions 
 		sum.Name.Name = "sum"
 		next := len(selectStatement.Columns)
 		newColumns[i] = next
-		newAggregateFunctions[next] = "COUNT"
-		newAggregateFunctions[next+1] = "SUM"
+		newAggregateFunctions[next] = count
+		newAggregateFunctions[next+1] = sum
 		selectStatement.Columns = append(selectStatement.Columns, &sql.ResultColumn{
 			Expr: count,
 		})

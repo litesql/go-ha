@@ -497,10 +497,10 @@ func (s *distinctStringAggStrategy) apply(agg driver.Value, new driver.Value) dr
 		}
 		return new
 	}
+	if s.values == nil {
+		s.values = strings.Split(agg.(string), s.sep)
+	}
 	if new == nil {
-		if s.values == nil {
-			s.values = strings.Split(agg.(string), s.sep)
-		}
 		return agg
 	}
 	switch total := agg.(type) {

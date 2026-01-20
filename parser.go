@@ -106,7 +106,7 @@ func ParseStatement(ctx context.Context, source string) (*Statement, error) {
 		return &Statement{
 			source:           source,
 			typ:              TypeOther,
-			modifiesDatabase: true,
+			modifiesDatabase: false,
 		}, nil
 	}
 

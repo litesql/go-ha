@@ -58,6 +58,7 @@ type ConnHooksConfig struct {
 	TxSeqTrackerProvider TxSeqTrackerProvider
 	Leader               LeaderProvider
 	GrpcTimeout          time.Duration
+	GrpcToken            string
 	QueryRouter          *regexp.Regexp
 }
 
@@ -204,6 +205,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		},
 		Leader:      c.leaderProvider,
 		GrpcTimeout: c.grpcTimeout,
+		GrpcToken:   c.grpcToken,
 		QueryRouter: c.queryRouter,
 	})
 	c.db = sql.OpenDB(&c)

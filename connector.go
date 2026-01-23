@@ -275,7 +275,15 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			if err != nil {
 				return nil, fmt.Errorf("failed to start gRPC server: %w", err)
 			}
-			s := grpc.NewServer()
+			opts := make([]grpc.ServerOption, 0)
+			if c.grpcToken == "" {
+				slog.Warn("no gRPC token configured, the gRPC server will be unauthenticated. Do not use this configuration in production environments!")
+			} else {
+				authInterceptor := hagrpc.NewAuthInterceptor(c.grpcToken)
+				opts = append(opts, grpc.UnaryInterceptor(authInterceptor.Unary()))
+				opts = append(opts, grpc.StreamInterceptor(authInterceptor.Stream()))
+			}
+			s := grpc.NewServer(opts...)
 			sqlv1.RegisterDatabaseServiceServer(s, &hagrpc.Service{
 				DBProvider: func(id string) (hagrpc.HADB, bool) {
 					connector, ok := LookupConnectorByReplicationID(id)
@@ -366,6 +374,7 @@ type Connector struct {
 
 	grpcPort    int
 	grpcTimeout time.Duration
+	grpcToken   string
 
 	closers []io.Closer
 }

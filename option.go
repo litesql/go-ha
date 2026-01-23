@@ -201,6 +201,12 @@ func WithGrpcTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithGrpcToken(token string) Option {
+	return func(c *Connector) {
+		c.grpcToken = token
+	}
+}
+
 func WithQueryRouter(re *regexp.Regexp) Option {
 	return func(c *Connector) {
 		c.queryRouter = re
@@ -362,6 +368,8 @@ func NameToOptions(name string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid grpcTimeout: %w", err)
 			}
 			opts = append(opts, WithGrpcTimeout(timeout))
+		case "grpcToken":
+			opts = append(opts, WithGrpcToken(value))
 		case "leaderProvider":
 			typ, target, ok := strings.Cut(value, ":")
 			if !ok {

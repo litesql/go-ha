@@ -31,7 +31,8 @@ Go database/sql base driver providing high availability for SQLite databases.
 | disableDBSnapshotter    | Disables the database snapshotter used for initial synchronization.                            | false           |
 | disableDDLSync          | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
 | grpcPort                | TCP port for the gRPC server                                       |      |  
-| grpcTimeout                | Timeout for the gRPC operations                                 | 5s   |   
+| grpcTimeout                | Timeout for the gRPC operations                                 | 5s   |
+| grpcToken                 | Token to protect gRPC server |     |   
 | leaderProvider            | Defines the strategy for determining a leader node in the cluster. This is useful for redirecting HTTP requests. Examples include `dynamic:http://host:port` or `static:http://host:port`.   |       |
 | name                    | Name of the node in the cluster.                                                   |                 |
 | natsConfigFile          | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |

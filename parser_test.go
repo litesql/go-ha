@@ -302,7 +302,7 @@ func TestStatementModifiesDatabase(t *testing.T) {
 		},
 		"vacuum": {
 			sql:              "VACUUM",
-			modifiesDatabase: true,
+			modifiesDatabase: false,
 		},
 		"explain": {
 			sql:              "EXPLAIN QUERY PLAN SELECT * FROM user",

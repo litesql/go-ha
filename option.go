@@ -3,6 +3,7 @@ package ha
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -235,7 +236,10 @@ func NameToOptions(name string) (string, []Option, error) {
 	}
 	slices.Sort(keys)
 
-	var opts []Option
+	opts, err := envToOptions()
+	if err != nil {
+		return "", nil, err
+	}
 	var dsnOptions []string
 	var natsConfig EmbeddedNatsConfig
 	for _, k := range keys {
@@ -415,4 +419,195 @@ func NameToOptions(name string) (string, []Option, error) {
 		dsn = fmt.Sprintf("%s?%s", dsn, strings.Join(dsnOptions, "&"))
 	}
 	return dsn, opts, nil
+}
+
+func envToOptions() ([]Option, error) {
+	opts := make([]Option, 0)
+	if v := os.Getenv("HA_NAME"); v != "" {
+		opts = append(opts, WithName(v))
+	}
+	if v := os.Getenv("HA_ROW_IDENTIFY"); v != "" {
+		var rowIdentify RowIdentify
+		switch v {
+		case string(PK):
+			rowIdentify = PK
+		case string(Rowid):
+			rowIdentify = Rowid
+		case string(Full):
+			rowIdentify = Full
+		default:
+			return nil, fmt.Errorf("invalid rowIdentify value. Use pk, rowid or full")
+		}
+		opts = append(opts, WithRowIdentify(rowIdentify))
+	}
+	if v := os.Getenv("HA_REPLICATION_URL"); v != "" {
+		opts = append(opts, WithReplicationURL(v))
+	}
+	if v := os.Getenv("HA_REPLICATION_STREAM"); v != "" {
+		opts = append(opts, WithReplicationStream(v))
+	}
+	if v := os.Getenv("HA_DELIVER_POLICY"); v != "" {
+		opts = append(opts, WithDeliverPolicy(v))
+	}
+	if v := os.Getenv("HA_PUBLISHER_TIMEOUT"); v != "" {
+		timeout, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid publisherTimeout: %w", err)
+		}
+		opts = append(opts, WithPublisherTimeout(timeout))
+	}
+	if v := os.Getenv("HA_ASYNC_PUBLISHER"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid asyncPublisher: %w", err)
+		}
+		if b {
+			opts = append(opts, WithAsyncPublisher())
+		}
+	}
+	if v := os.Getenv("HA_ASYNC_PUBLISHER_OUTBOX_DIR"); v != "" {
+		opts = append(opts, WithAsyncPublisherOutboxDir(v))
+	}
+	if v := os.Getenv("HA_REPLICATION_ID"); v != "" {
+		opts = append(opts, WithReplicationID(v))
+	}
+	if v := os.Getenv("HA_CLUSTER_SIZE"); v != "" {
+		size, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid clusterSize: %w", err)
+		}
+		opts = append(opts, WithClusterSize(size))
+	}
+	if v := os.Getenv("HA_REPLICAS"); v != "" {
+		replicas, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid replicas: %w", err)
+		}
+		opts = append(opts, WithReplicas(replicas))
+	}
+	if v := os.Getenv("HA_STREAM_MAX_AGE"); v != "" {
+		maxAge, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid streamMaxAge: %w", err)
+		}
+		opts = append(opts, WithStreamMaxAge(maxAge))
+	}
+	if v := os.Getenv("HA_SNAPSHOT_INTERVAL"); v != "" {
+		interval, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid snapshotInterval: %w", err)
+		}
+		opts = append(opts, WithSnapshotInterval(interval))
+	}
+	var natsConfig EmbeddedNatsConfig
+	if v := os.Getenv("HA_NATS_NAME"); v != "" {
+		natsConfig.Name = v
+	}
+	if v := os.Getenv("HA_NATS_PORT"); v != "" {
+		port, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid natsPort: %w", err)
+		}
+		natsConfig.Port = port
+	}
+	if v := os.Getenv("HA_NATS_CONFIG_FILE"); v != "" {
+		natsConfig.File = v
+	}
+	if v := os.Getenv("HA_NATS_STORE_DIR"); v != "" {
+		natsConfig.StoreDir = v
+	}
+	if v := os.Getenv("HA_NATS_USER"); v != "" {
+		natsConfig.User = v
+	}
+	if v := os.Getenv("HA_NATS_PASS"); v != "" {
+		natsConfig.Pass = v
+	}
+	if v := os.Getenv("HA_DISABLE_DDL_SYNC"); v != "" {
+		disable, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid disableDDLSync: %w", err)
+		}
+		if disable {
+			opts = append(opts, WithDisableDDLSync())
+		}
+	}
+	if v := os.Getenv("HA_DISABLE_PUBLISHER"); v != "" {
+		disable, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid disablePublisher: %w", err)
+		}
+		if disable {
+			opts = append(opts, WithReplicationPublisher(NewNoopPublisher()))
+		}
+	}
+	if v := os.Getenv("HA_DISABLE_SUBSCRIBER"); v != "" {
+		disable, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid disableSubscriber: %w", err)
+		}
+		if disable {
+			opts = append(opts, WithReplicationSubscriber(NewNoopSubscriber()))
+		}
+	}
+	if v := os.Getenv("HA_DISABLE_DB_SNAPSHOTTER"); v != "" {
+		disable, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid disableDBSnapshotter: %w", err)
+		}
+		if disable {
+			opts = append(opts, WithDBSnapshotter(NewNoopSnapshotter()))
+		}
+	}
+	if v := os.Getenv("HA_GRPC_PORT"); v != "" {
+		port, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid grpcPort: %w", err)
+		}
+		opts = append(opts, WithGrpcPort(port))
+	}
+	if v := os.Getenv("HA_GRPC_TIMEOUT"); v != "" {
+		timeout, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid grpcTimeout: %w", err)
+		}
+		opts = append(opts, WithGrpcTimeout(timeout))
+	}
+	if v := os.Getenv("HA_GRPC_TOKEN"); v != "" {
+		opts = append(opts, WithGrpcToken(v))
+	}
+	if v := os.Getenv("HA_LEADER_PROVIDER"); v != "" {
+		typ, target, ok := strings.Cut(v, ":")
+		if !ok {
+			return nil, fmt.Errorf("invalid leaderStrategy. Use leaderStrategy=dynamic:http://localhost:8080 or leaderStrategy=static:http://host:port")
+		}
+		switch typ {
+		case "dynamic":
+			opts = append(opts, WithLeaderElectionLocalTarget(target))
+		case "static":
+			opts = append(opts, WithLeaderProvider(&StaticLeader{
+				Target: target,
+			}))
+		default:
+			return nil, fmt.Errorf("invalid leaderStrategy, prefix with static or dynamic option. Examples: leaderStrategy=dynamic:http://localhost:8080 or leaderStrategy=static:http://host:port")
+		}
+	}
+	if v := os.Getenv("HA_QUERY_ROUTER"); v != "" {
+		re, err := regexp.Compile(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid queryRouter: %w", err)
+		}
+		opts = append(opts, WithQueryRouter(re))
+	}
+	if v := os.Getenv("HA_AUTO_START"); v != "" {
+		autoStart, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid autoStart: %w", err)
+		}
+		opts = append(opts, WithAutoStart(autoStart))
+	}
+
+	if !natsConfig.empty() {
+		opts = append(opts, WithEmbeddedNatsConfig(&natsConfig))
+	}
+	return opts, nil
 }

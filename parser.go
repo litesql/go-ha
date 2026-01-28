@@ -64,18 +64,19 @@ type Statement struct {
 func UnverifiedStatement(source string, hasDistinct bool,
 	hasReturning bool, typ string, parameters []string, columns []string,
 	ddl bool, hasIfExists bool, hasModifier bool,
-	modifiesDatabase bool) *Statement {
+	modifiesDatabase bool, aggregateFunctions map[int]*sql.Call) *Statement {
 	return &Statement{
-		source:           source,
-		hasDistinct:      hasDistinct,
-		hasReturning:     hasReturning,
-		typ:              typ,
-		parameters:       parameters,
-		columns:          columns,
-		ddl:              ddl,
-		hasIfExists:      hasIfExists,
-		hasModifier:      hasModifier,
-		modifiesDatabase: modifiesDatabase,
+		source:             source,
+		hasDistinct:        hasDistinct,
+		hasReturning:       hasReturning,
+		typ:                typ,
+		parameters:         parameters,
+		columns:            columns,
+		ddl:                ddl,
+		hasIfExists:        hasIfExists,
+		hasModifier:        hasModifier,
+		modifiesDatabase:   modifiesDatabase,
+		aggregateFunctions: aggregateFunctions,
 	}
 }
 

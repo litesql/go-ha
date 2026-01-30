@@ -64,9 +64,24 @@ func TestStatement(t *testing.T) {
 			sql:      "SELECT * FROM user where name = ';'; DELETE FROM user WHERE id = 1;",
 			hasError: true,
 		},
-
 		"dbeaver metadata query": {
 			sql:      "select sql from sqlite_schema where lower(name) = lower('Genre')",
+			hasError: false,
+		},
+		"insert with db": {
+			sql:      "INSERT INTO user (name, `rowid`) VALUES (?1, ?2) ON CONFLICT DO UPDATE SET name = 'ww', `rowid` = 1;",
+			hasError: false,
+		},
+		"replace with db": {
+			sql:      "REPLACE INTO main.user (id, name) VALUES (1, 'WW')",
+			hasError: false,
+		},
+		"update with db": {
+			sql:      "UPDATE main.user SET name = 'WW' WHERE rowid = ?",
+			hasError: false,
+		},
+		"delete with db": {
+			sql:      "DELETE FROM main.user WHERE `rowid` = ?1",
 			hasError: false,
 		},
 	}

@@ -8,14 +8,15 @@ import (
 	"log/slog"
 	"strings"
 
-	"google.golang.org/grpc"
+	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
+	"github.com/litesql/go-ha/api/sql/v1/sqlv1connect"
 )
 
 type Service struct {
-	sqlv1.UnimplementedDatabaseServiceServer
+	sqlv1connect.UnimplementedDatabaseServiceHandler
 	DBProvider         DBProvider
 	DSNList            DataSourceNamesFn
 	ReplicationIDList  ReplicationIDsFn
@@ -26,6 +27,7 @@ type HADB interface {
 	PubSeq() uint64
 	DB() *sql.DB
 	LatestSnapshot(context.Context) (uint64, io.ReadCloser, error)
+	Backup(context.Context, io.Writer) error
 }
 
 type DBProvider func(id string) (HADB, bool)
@@ -39,7 +41,7 @@ type execQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse]) error {
+func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.QueryRequest, sqlv1.QueryResponse]) error {
 	var (
 		hadb HADB
 		db   *sql.DB
@@ -55,7 +57,7 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 		}
 	}()
 	for {
-		req, err := stream.Recv()
+		req, err := stream.Receive()
 		if err != nil {
 			if err == io.EOF {
 				return nil
@@ -195,17 +197,17 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 
 			switch req.Type {
 			case sqlv1.QueryType_QUERY_TYPE_EXEC_QUERY:
-				err := s.execQuery(stream, hadb, ex, sqlQuery, args)
+				err := s.execQuery(ctx, stream, hadb, ex, sqlQuery, args)
 				if err != nil {
 					return err
 				}
 			case sqlv1.QueryType_QUERY_TYPE_EXEC_UPDATE:
-				err := s.execUpdate(stream, hadb, ex, sqlQuery, args)
+				err := s.execUpdate(ctx, stream, hadb, ex, sqlQuery, args)
 				if err != nil {
 					return err
 				}
 			default:
-				expectResultSet, err := s.SQLExpectResultSet(stream.Context(), sqlQuery)
+				expectResultSet, err := s.SQLExpectResultSet(ctx, sqlQuery)
 				if err != nil {
 					err := stream.Send(&sqlv1.QueryResponse{
 						Error: err.Error(),
@@ -216,12 +218,12 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 					continue
 				}
 				if expectResultSet {
-					err = s.execQuery(stream, hadb, ex, sqlQuery, args)
+					err = s.execQuery(ctx, stream, hadb, ex, sqlQuery, args)
 					if err != nil {
 						return err
 					}
 				} else {
-					err = s.execUpdate(stream, hadb, ex, sqlQuery, args)
+					err = s.execUpdate(ctx, stream, hadb, ex, sqlQuery, args)
 					if err != nil {
 						return err
 					}
@@ -232,14 +234,14 @@ func (s *Service) Query(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv
 	}
 }
 
-func (s *Service) execQuery(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
-	resp := query(stream.Context(), ex, sqlQuery, args...)
+func (s *Service) execQuery(ctx context.Context, stream *connect.BidiStream[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
+	resp := query(ctx, ex, sqlQuery, args...)
 	resp.Txseq = hadb.PubSeq()
 	return stream.Send(resp)
 }
 
-func (s *Service) execUpdate(stream grpc.BidiStreamingServer[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
-	res, err := ex.ExecContext(stream.Context(), sqlQuery, args...)
+func (s *Service) execUpdate(ctx context.Context, stream *connect.BidiStream[sqlv1.QueryRequest, sqlv1.QueryResponse], hadb HADB, ex execQuerier, sqlQuery string, args []any) error {
+	res, err := ex.ExecContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return stream.Send(&sqlv1.QueryResponse{
 			Error: err.Error(),
@@ -266,38 +268,90 @@ func (s *Service) execUpdate(stream grpc.BidiStreamingServer[sqlv1.QueryRequest,
 	})
 }
 
-func (s *Service) DataSourceNames(ctx context.Context, req *sqlv1.DataSourceNamesRequest) (*sqlv1.DataSourceNamesResponse, error) {
-	return &sqlv1.DataSourceNamesResponse{
+func (s *Service) DataSourceNames(ctx context.Context, req *connect.Request[sqlv1.DataSourceNamesRequest]) (*connect.Response[sqlv1.DataSourceNamesResponse], error) {
+	return connect.NewResponse(&sqlv1.DataSourceNamesResponse{
 		Dsn: s.DSNList(),
-	}, nil
+	}), nil
 }
 
-func (s *Service) LatestSnapshot(ctx context.Context, req *sqlv1.LatestSnapshotRequest) (*sqlv1.LatestSnapshotResponse, error) {
-	db, ok := s.DBProvider(req.ReplicationId)
+const chunkSize = 64 * 1024 // 64KB
+
+func (s *Service) Download(ctx context.Context, req *connect.Request[sqlv1.DownloadRequest], resp *connect.ServerStream[sqlv1.DownloadResponse]) error {
+	db, ok := s.DBProvider(req.Msg.ReplicationId)
 	if !ok {
-		return nil, fmt.Errorf("database with replication id %q not found", req.ReplicationId)
+		return fmt.Errorf("database with replication id %q not found", req.Msg.ReplicationId)
 	}
-	sequence, reader, err := db.LatestSnapshot(ctx)
+
+	err := db.Backup(ctx, &streamWriter{resp: resp})
 	if err != nil {
-		return nil, err
+		return err
+	}
+
+	return nil
+}
+
+type streamWriter struct {
+	resp *connect.ServerStream[sqlv1.DownloadResponse]
+}
+
+func (sw *streamWriter) Write(p []byte) (n int, err error) {
+	total := len(p)
+	sent := 0
+	for sent < total {
+		chunkSize := chunkSize
+		remaining := total - sent
+		if remaining < chunkSize {
+			chunkSize = remaining
+		}
+		err := sw.resp.Send(&sqlv1.DownloadResponse{
+			Data: p[sent : sent+chunkSize],
+		})
+		if err != nil {
+			return sent, err
+		}
+		sent += chunkSize
+	}
+	return total, nil
+}
+
+func (s *Service) LatestSnapshot(ctx context.Context, req *connect.Request[sqlv1.LatestSnapshotRequest], resp *connect.ServerStream[sqlv1.LatestSnapshotResponse]) error {
+	db, ok := s.DBProvider(req.Msg.ReplicationId)
+	if !ok {
+		return fmt.Errorf("database with replication id %q not found", req.Msg.ReplicationId)
+	}
+	_, reader, err := db.LatestSnapshot(ctx)
+	if err != nil {
+		return err
 	}
 	defer reader.Close()
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
+
+	buf := make([]byte, chunkSize)
+	for {
+		n, err := reader.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		if n == 0 {
+			break
+		}
+		err = resp.Send(&sqlv1.LatestSnapshotResponse{
+			Data: buf[:n],
+		})
+		if err != nil {
+			return err
+		}
 	}
 
-	return &sqlv1.LatestSnapshotResponse{
-		Sequence: sequence,
-		Data:     data,
-	}, nil
-
+	return nil
 }
 
-func (s *Service) ReplicationIDs(ctx context.Context, req *sqlv1.ReplicationIDsRequest) (*sqlv1.ReplicationIDsResponse, error) {
-	return &sqlv1.ReplicationIDsResponse{
+func (s *Service) ReplicationIDs(ctx context.Context, req *connect.Request[sqlv1.ReplicationIDsRequest]) (*connect.Response[sqlv1.ReplicationIDsResponse], error) {
+	return connect.NewResponse(&sqlv1.ReplicationIDsResponse{
 		ReplicationId: s.ReplicationIDList(),
-	}, nil
+	}), nil
 }
 
 func query(ctx context.Context, ex execQuerier, query string, args ...any) *sqlv1.QueryResponse {

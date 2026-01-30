@@ -9,7 +9,8 @@ option go_package = "github.com/litesql/go-ha/api/sql/v1;sqlv1";
 service DatabaseService {
   rpc Query(stream QueryRequest) returns (stream QueryResponse) {}
   rpc DataSourceNames(DataSourceNamesRequest) returns (DataSourceNamesResponse) {}
-  rpc LatestSnapshot(LatestSnapshotRequest) returns (LatestSnapshotResponse) {}
+  rpc Download(DownloadRequest) returns (stream DownloadResponse) {}
+  rpc LatestSnapshot(LatestSnapshotRequest) returns (stream LatestSnapshotResponse) {}
   rpc ReplicationIDs(ReplicationIDsRequest) returns (ReplicationIDsResponse) {}
 }
 
@@ -55,13 +56,20 @@ message DataSourceNamesResponse {
   repeated string dsn = 1;
 }
 
+message DownloadRequest {
+  string replication_id = 1;
+}
+
+message DownloadResponse {
+  bytes data = 1;
+}
+
 message LatestSnapshotRequest {
   string replication_id = 1;
 }
 
-message LatestSnapshotResponse {
-  uint64 sequence = 1;
-  bytes data = 2;
+message LatestSnapshotResponse {  
+  bytes data = 1;
 }
 
 message ReplicationIDsRequest {}

@@ -10,6 +10,7 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,12 +21,12 @@ import (
 	"sync"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"google.golang.org/grpc"
 
-	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
-	hagrpc "github.com/litesql/go-ha/grpc"
+	"github.com/litesql/go-ha/api/sql/v1/sqlv1connect"
+	haconnect "github.com/litesql/go-ha/connect"
 )
 
 const DefaultStream = "ha_replication"
@@ -33,7 +34,7 @@ const DefaultStream = "ha_replication"
 var (
 	connectors        = make(map[string]*Connector)
 	natsClientServers = make(map[*EmbeddedNatsConfig]*natsClientServer)
-	grpcServers       = make(map[int]*hagrpc.Server)
+	grpcServers       = make(map[int]*haconnect.Server)
 	muConnectors      sync.RWMutex
 )
 
@@ -76,6 +77,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		clusterSize:       1,
 		dsn:               dsn,
 		driver:            drv,
+		backupFn:          backupFn,
 		rowIdentify:       PK,
 		replicationStream: DefaultStream,
 		publisherTimeout:  15 * time.Second,
@@ -277,42 +279,31 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			if err != nil {
 				return nil, fmt.Errorf("failed to start gRPC server: %w", err)
 			}
-			opts := make([]grpc.ServerOption, 0)
+			opts := make([]connect.HandlerOption, 0)
 			if c.grpcToken == "" {
 				slog.Warn("no gRPC token configured, the gRPC server will be unauthenticated. Do not use this configuration in production environments!")
 			} else {
-				authInterceptor := hagrpc.NewAuthInterceptor(c.grpcToken)
-				opts = append(opts, grpc.UnaryInterceptor(authInterceptor.Unary()))
-				opts = append(opts, grpc.StreamInterceptor(authInterceptor.Stream()))
+				authInterceptor := haconnect.NewAuthInterceptor(c.grpcToken)
+				opts = append(opts, connect.WithInterceptors(authInterceptor))
 			}
-			s := grpc.NewServer(opts...)
-			sqlv1.RegisterDatabaseServiceServer(s, &hagrpc.Service{
-				DBProvider: func(id string) (hagrpc.HADB, bool) {
-					connector, ok := LookupConnectorByReplicationID(id)
-					if !ok {
-						return nil, false
-					}
-					return connector, true
-				},
-				DSNList:           ListDSN,
-				ReplicationIDList: ListReplicationIDs,
-				SQLExpectResultSet: func(ctx context.Context, sql string) (bool, error) {
-					stmt, err := ParseStatement(ctx, sql)
-					if err != nil {
-						return false, err
-					}
-					expectResultSet := stmt.HasReturning() || stmt.IsSelect() || stmt.IsExplain()
-					return expectResultSet, nil
-				},
-			})
-			slog.Info("gRPC server listening", "addr", lis.Addr())
+			path, handler := ConnectHandler(opts...)
+			mux := http.NewServeMux()
+			mux.Handle(path, handler)
+			p := new(http.Protocols)
+			p.SetHTTP1(true)
+			p.SetUnencryptedHTTP2(true)
+			s := http.Server{
+				Handler:   mux,
+				Protocols: p,
+			}
+			slog.Info("HA gRPC/connect server listening", "addr", lis.Addr())
 			go func() {
 				if err := s.Serve(lis); err != nil {
 					log.Fatalf("failed to serve grpc: %v", err)
 				}
 			}()
-			grpcServers[c.grpcPort] = &hagrpc.Server{
-				Server: s,
+			grpcServers[c.grpcPort] = &haconnect.Server{
+				Server: &s,
 			}
 		} else {
 			grpcServers[c.grpcPort].ReferenceCount++
@@ -340,6 +331,7 @@ const (
 type Connector struct {
 	driver                  driver.Driver
 	connHooksProvider       ConnHooksProvider
+	backupFn                BackupFn
 	dsn                     string
 	name                    string
 	extensions              []string
@@ -432,6 +424,28 @@ func ListReplicationIDs() []string {
 
 var ErrSnapshotterNotConfigured = errors.New("snapshotter not configured")
 
+func ConnectHandler(opts ...connect.HandlerOption) (path string, handler http.Handler) {
+	return sqlv1connect.NewDatabaseServiceHandler(&haconnect.Service{
+		DBProvider: func(id string) (haconnect.HADB, bool) {
+			connector, ok := LookupConnectorByReplicationID(id)
+			if !ok {
+				return nil, false
+			}
+			return connector, true
+		},
+		DSNList:           ListDSN,
+		ReplicationIDList: ListReplicationIDs,
+		SQLExpectResultSet: func(ctx context.Context, sql string) (bool, error) {
+			stmt, err := ParseStatement(ctx, sql)
+			if err != nil {
+				return false, err
+			}
+			expectResultSet := stmt.HasReturning() || stmt.IsSelect() || stmt.IsExplain()
+			return expectResultSet, nil
+		},
+	}, opts...)
+}
+
 func (c *Connector) Start(db *sql.DB) error {
 	c.db = db
 	if c.autoStart {
@@ -454,6 +468,13 @@ func (c *Connector) Start(db *sql.DB) error {
 		c.snapshotter.Start()
 	}
 	return err
+}
+
+func (c *Connector) Backup(ctx context.Context, writer io.Writer) error {
+	if c.backupFn == nil {
+		return fmt.Errorf("backup function not configured")
+	}
+	return c.backupFn(ctx, c.db, writer)
 }
 
 func (c *Connector) NodeName() string {
@@ -547,7 +568,9 @@ func (c *Connector) Close() {
 		if server, ok := grpcServers[c.grpcPort]; ok {
 			server.ReferenceCount--
 			if server.ReferenceCount <= 0 {
-				server.GracefulStop()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				server.Shutdown(ctx)
 				delete(grpcServers, c.grpcPort)
 			}
 		}

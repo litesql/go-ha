@@ -1,8 +1,8 @@
 package grpc
 
-import "google.golang.org/grpc"
+import "net/http"
 
 type Server struct {
-	*grpc.Server
+	*http.Server
 	ReferenceCount int
 }

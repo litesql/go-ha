@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	DatabaseService_Query_FullMethodName           = "/sql.v1.DatabaseService/Query"
 	DatabaseService_DataSourceNames_FullMethodName = "/sql.v1.DatabaseService/DataSourceNames"
+	DatabaseService_Download_FullMethodName        = "/sql.v1.DatabaseService/Download"
 	DatabaseService_LatestSnapshot_FullMethodName  = "/sql.v1.DatabaseService/LatestSnapshot"
 	DatabaseService_ReplicationIDs_FullMethodName  = "/sql.v1.DatabaseService/ReplicationIDs"
 )
@@ -31,7 +32,8 @@ const (
 type DatabaseServiceClient interface {
 	Query(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[QueryRequest, QueryResponse], error)
 	DataSourceNames(ctx context.Context, in *DataSourceNamesRequest, opts ...grpc.CallOption) (*DataSourceNamesResponse, error)
-	LatestSnapshot(ctx context.Context, in *LatestSnapshotRequest, opts ...grpc.CallOption) (*LatestSnapshotResponse, error)
+	Download(ctx context.Context, in *DownloadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadResponse], error)
+	LatestSnapshot(ctx context.Context, in *LatestSnapshotRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LatestSnapshotResponse], error)
 	ReplicationIDs(ctx context.Context, in *ReplicationIDsRequest, opts ...grpc.CallOption) (*ReplicationIDsResponse, error)
 }
 
@@ -66,15 +68,43 @@ func (c *databaseServiceClient) DataSourceNames(ctx context.Context, in *DataSou
 	return out, nil
 }
 
-func (c *databaseServiceClient) LatestSnapshot(ctx context.Context, in *LatestSnapshotRequest, opts ...grpc.CallOption) (*LatestSnapshotResponse, error) {
+func (c *databaseServiceClient) Download(ctx context.Context, in *DownloadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(LatestSnapshotResponse)
-	err := c.cc.Invoke(ctx, DatabaseService_LatestSnapshot_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &DatabaseService_ServiceDesc.Streams[1], DatabaseService_Download_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[DownloadRequest, DownloadResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DatabaseService_DownloadClient = grpc.ServerStreamingClient[DownloadResponse]
+
+func (c *databaseServiceClient) LatestSnapshot(ctx context.Context, in *LatestSnapshotRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LatestSnapshotResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DatabaseService_ServiceDesc.Streams[2], DatabaseService_LatestSnapshot_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[LatestSnapshotRequest, LatestSnapshotResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DatabaseService_LatestSnapshotClient = grpc.ServerStreamingClient[LatestSnapshotResponse]
 
 func (c *databaseServiceClient) ReplicationIDs(ctx context.Context, in *ReplicationIDsRequest, opts ...grpc.CallOption) (*ReplicationIDsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -92,7 +122,8 @@ func (c *databaseServiceClient) ReplicationIDs(ctx context.Context, in *Replicat
 type DatabaseServiceServer interface {
 	Query(grpc.BidiStreamingServer[QueryRequest, QueryResponse]) error
 	DataSourceNames(context.Context, *DataSourceNamesRequest) (*DataSourceNamesResponse, error)
-	LatestSnapshot(context.Context, *LatestSnapshotRequest) (*LatestSnapshotResponse, error)
+	Download(*DownloadRequest, grpc.ServerStreamingServer[DownloadResponse]) error
+	LatestSnapshot(*LatestSnapshotRequest, grpc.ServerStreamingServer[LatestSnapshotResponse]) error
 	ReplicationIDs(context.Context, *ReplicationIDsRequest) (*ReplicationIDsResponse, error)
 	mustEmbedUnimplementedDatabaseServiceServer()
 }
@@ -110,8 +141,11 @@ func (UnimplementedDatabaseServiceServer) Query(grpc.BidiStreamingServer[QueryRe
 func (UnimplementedDatabaseServiceServer) DataSourceNames(context.Context, *DataSourceNamesRequest) (*DataSourceNamesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DataSourceNames not implemented")
 }
-func (UnimplementedDatabaseServiceServer) LatestSnapshot(context.Context, *LatestSnapshotRequest) (*LatestSnapshotResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method LatestSnapshot not implemented")
+func (UnimplementedDatabaseServiceServer) Download(*DownloadRequest, grpc.ServerStreamingServer[DownloadResponse]) error {
+	return status.Error(codes.Unimplemented, "method Download not implemented")
+}
+func (UnimplementedDatabaseServiceServer) LatestSnapshot(*LatestSnapshotRequest, grpc.ServerStreamingServer[LatestSnapshotResponse]) error {
+	return status.Error(codes.Unimplemented, "method LatestSnapshot not implemented")
 }
 func (UnimplementedDatabaseServiceServer) ReplicationIDs(context.Context, *ReplicationIDsRequest) (*ReplicationIDsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReplicationIDs not implemented")
@@ -162,23 +196,27 @@ func _DatabaseService_DataSourceNames_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DatabaseService_LatestSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(LatestSnapshotRequest)
-	if err := dec(in); err != nil {
-		return nil, err
+func _DatabaseService_Download_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(DownloadRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(DatabaseServiceServer).LatestSnapshot(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DatabaseService_LatestSnapshot_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DatabaseServiceServer).LatestSnapshot(ctx, req.(*LatestSnapshotRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(DatabaseServiceServer).Download(m, &grpc.GenericServerStream[DownloadRequest, DownloadResponse]{ServerStream: stream})
 }
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DatabaseService_DownloadServer = grpc.ServerStreamingServer[DownloadResponse]
+
+func _DatabaseService_LatestSnapshot_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(LatestSnapshotRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DatabaseServiceServer).LatestSnapshot(m, &grpc.GenericServerStream[LatestSnapshotRequest, LatestSnapshotResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DatabaseService_LatestSnapshotServer = grpc.ServerStreamingServer[LatestSnapshotResponse]
 
 func _DatabaseService_ReplicationIDs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReplicationIDsRequest)
@@ -210,10 +248,6 @@ var DatabaseService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DatabaseService_DataSourceNames_Handler,
 		},
 		{
-			MethodName: "LatestSnapshot",
-			Handler:    _DatabaseService_LatestSnapshot_Handler,
-		},
-		{
 			MethodName: "ReplicationIDs",
 			Handler:    _DatabaseService_ReplicationIDs_Handler,
 		},
@@ -224,6 +258,16 @@ var DatabaseService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _DatabaseService_Query_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "Download",
+			Handler:       _DatabaseService_Download_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "LatestSnapshot",
+			Handler:       _DatabaseService_LatestSnapshot_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "sql/v1/sql.proto",

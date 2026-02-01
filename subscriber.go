@@ -186,13 +186,13 @@ func (s *NATSSubscriber) Start() error {
 	}
 	defer s.connProvider.EnableHooks(conn)
 
-	_, err = conn.ExecContext(context.Background(), "CREATE TABLE IF NOT EXISTS ha_stats(subject TEXT UNIQUE, received_seq INTEGER, updated_at DATETIME)")
+	_, err = conn.ExecContext(context.Background(), "CREATE TABLE IF NOT EXISTS "+controlTableName+"(subject TEXT UNIQUE, received_seq INTEGER, updated_at DATETIME)")
 	if err != nil {
 		return err
 	}
 
 	var recv uint64
-	err = conn.QueryRowContext(context.Background(), "SELECT received_seq FROM ha_stats WHERE subject = ?", s.subject).Scan(&recv)
+	err = conn.QueryRowContext(context.Background(), "SELECT received_seq FROM "+controlTableName+" WHERE subject = ?", s.subject).Scan(&recv)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -287,10 +287,10 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		defer s.connProvider.EnableHooks(conn)
 
 		_, err = conn.ExecContext(context.Background(),
-			"REPLACE INTO ha_stats(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+			"REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 			s.subject, meta.Sequence.Stream, time.Now().Format(time.RFC3339Nano))
 		if err != nil {
-			slog.Debug("failed to update ha_stats table", "subject", s.subject, "seq", meta.Sequence.Stream, "error", err)
+			slog.Debug("failed to update "+controlTableName+" table", "subject", s.subject, "seq", meta.Sequence.Stream, "error", err)
 		}
 		s.ack(msg, meta)
 		return

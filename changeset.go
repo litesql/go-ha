@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const controlTableName = "ha_stats"
+
 type ChangeSet struct {
 	interceptor   ChangeSetInterceptor
 	connProvider  ConnHooksProvider
@@ -102,10 +104,10 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		return
 	}
 
-	_, errStats := conn.ExecContext(context.Background(), "REPLACE INTO ha_stats(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+	_, errStats := conn.ExecContext(context.Background(), "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
 	if errStats != nil {
-		slog.Error("failed to update ha_stats table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
+		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
 	}
 	err = tx.Commit()
 	return
@@ -145,6 +147,9 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 
 func fullIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 	for _, change := range cs.Changes {
+		if change.Table == controlTableName {
+			continue
+		}
 		var (
 			err error
 			sql string
@@ -186,6 +191,9 @@ func fullIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 
 func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 	for _, change := range cs.Changes {
+		if change.Table == controlTableName {
+			continue
+		}
 		var (
 			err error
 			sql string
@@ -233,6 +241,9 @@ func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 
 func rowidIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 	for _, change := range cs.Changes {
+		if change.Table == controlTableName {
+			continue
+		}
 		var (
 			err error
 			sql string

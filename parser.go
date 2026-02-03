@@ -274,11 +274,6 @@ func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
 		s.typ = TypeDrop
 	case *sql.PragmaStatement:
 		s.modifiesDatabase = false
-		if n.Expr != nil {
-			if strings.Contains(n.Expr.String(), "=") || strings.Contains(n.Expr.String(), "(") {
-				s.modifiesDatabase = true
-			}
-		}
 		s.typ = TypePragma
 	case *sql.SavepointStatement:
 		s.modifiesDatabase = true

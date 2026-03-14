@@ -35,6 +35,14 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 			Port:       cfg.Port,
 			StoreDir:   cfg.StoreDir,
 		}
+		if cfg.WebSocketPort > 0 {
+			opts.Websocket.Port = cfg.WebSocketPort
+			opts.Websocket.NoTLS = cfg.WebSocketNoTLS
+			opts.Websocket.Host = "0.0.0.0"
+			opts.Websocket.SameOrigin = false
+			opts.Websocket.HandshakeTimeout = 5 * time.Second
+			opts.Websocket.PingInterval = 30 * time.Second
+		}
 		if cfg.User != "" && cfg.Pass != "" {
 			appAcct := server.NewAccount("app")
 			appAcct.EnableJetStream(map[string]server.JetStreamAccountLimits{

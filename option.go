@@ -29,18 +29,20 @@ func WithExtensions(extensions ...string) Option {
 }
 
 type EmbeddedNatsConfig struct {
-	Name       string
-	Port       int
-	StoreDir   string
-	User       string
-	Pass       string
-	File       string
-	EnableLogs bool
+	Name           string
+	Port           int
+	StoreDir       string
+	User           string
+	Pass           string
+	File           string
+	WebSocketPort  int
+	WebSocketNoTLS bool
+	EnableLogs     bool
 }
 
 func (e EmbeddedNatsConfig) empty() bool {
 	return e.Name == "" && e.Port == 0 && e.StoreDir == "" &&
-		e.User == "" && e.Pass == "" && e.File == "" && !e.EnableLogs
+		e.User == "" && e.Pass == "" && e.File == "" && e.WebSocketPort == 0 && !e.EnableLogs
 }
 
 func WithEmbeddedNatsConfig(cfg *EmbeddedNatsConfig) Option {

@@ -135,7 +135,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
-	if natsConn == nil && c.replicationURL != "" {
+	if c.replicationURL != "" {
 		natsConn, err = nats.Connect(c.replicationURL, c.natsOptions...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to NATS server at %q: %w", c.replicationURL, err)

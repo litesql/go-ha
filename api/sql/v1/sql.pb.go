@@ -28,6 +28,7 @@ const (
 	QueryType_QUERY_TYPE_UNSPECIFIED QueryType = 0
 	QueryType_QUERY_TYPE_EXEC_UPDATE QueryType = 1
 	QueryType_QUERY_TYPE_EXEC_QUERY  QueryType = 2
+	QueryType_QUERY_TYPE_PING        QueryType = 3
 )
 
 // Enum value maps for QueryType.
@@ -36,11 +37,13 @@ var (
 		0: "QUERY_TYPE_UNSPECIFIED",
 		1: "QUERY_TYPE_EXEC_UPDATE",
 		2: "QUERY_TYPE_EXEC_QUERY",
+		3: "QUERY_TYPE_PING",
 	}
 	QueryType_value = map[string]int32{
 		"QUERY_TYPE_UNSPECIFIED": 0,
 		"QUERY_TYPE_EXEC_UPDATE": 1,
 		"QUERY_TYPE_EXEC_QUERY":  2,
+		"QUERY_TYPE_PING":        3,
 	}
 )
 
@@ -747,11 +750,12 @@ const file_sql_v1_sql_proto_rawDesc = "" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"\x17\n" +
 	"\x15ReplicationIDsRequest\"?\n" +
 	"\x16ReplicationIDsResponse\x12%\n" +
-	"\x0ereplication_id\x18\x01 \x03(\tR\rreplicationId*^\n" +
+	"\x0ereplication_id\x18\x01 \x03(\tR\rreplicationId*s\n" +
 	"\tQueryType\x12\x1a\n" +
 	"\x16QUERY_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16QUERY_TYPE_EXEC_UPDATE\x10\x01\x12\x19\n" +
-	"\x15QUERY_TYPE_EXEC_QUERY\x10\x022\x8e\x03\n" +
+	"\x15QUERY_TYPE_EXEC_QUERY\x10\x02\x12\x13\n" +
+	"\x0fQUERY_TYPE_PING\x10\x032\x8e\x03\n" +
 	"\x0fDatabaseService\x12:\n" +
 	"\x05Query\x12\x14.sql.v1.QueryRequest\x1a\x15.sql.v1.QueryResponse\"\x00(\x010\x01\x12T\n" +
 	"\x0fDataSourceNames\x12\x1e.sql.v1.DataSourceNamesRequest\x1a\x1f.sql.v1.DataSourceNamesResponse\"\x00\x12A\n" +

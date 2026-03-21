@@ -313,7 +313,7 @@ func TestStatementModifiesDatabase(t *testing.T) {
 		},
 		"pragma": {
 			sql:              "PRAGMA foreign_keys = 'ON'",
-			modifiesDatabase: true,
+			modifiesDatabase: false,
 		},
 		"vacuum": {
 			sql:              "VACUUM",

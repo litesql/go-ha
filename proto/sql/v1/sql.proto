@@ -18,6 +18,7 @@ enum QueryType {
   QUERY_TYPE_UNSPECIFIED = 0;
   QUERY_TYPE_EXEC_UPDATE = 1;
   QUERY_TYPE_EXEC_QUERY = 2;
+  QUERY_TYPE_PING = 3;
 }
 
 message QueryRequest {

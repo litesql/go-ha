@@ -64,6 +64,15 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 			}
 			return err
 		}
+
+		if req.Type == sqlv1.QueryType_QUERY_TYPE_PING {
+			err := stream.Send(&sqlv1.QueryResponse{})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
 		id := req.GetReplicationId()
 		if id != "" {
 			var ok bool

@@ -209,6 +209,12 @@ func WithGrpcToken(token string) Option {
 	}
 }
 
+func WithGrpcInsecure(insecure bool) Option {
+	return func(c *Connector) {
+		c.grpcInsecure = insecure
+	}
+}
+
 func WithQueryRouter(re *regexp.Regexp) Option {
 	return func(c *Connector) {
 		c.queryRouter = re
@@ -374,6 +380,12 @@ func NameToOptions(name string) (string, []Option, error) {
 			opts = append(opts, WithGrpcTimeout(timeout))
 		case "grpcToken":
 			opts = append(opts, WithGrpcToken(value))
+		case "grpcInsecure":
+			insecure, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid grpcInsecure: %w", err)
+			}
+			opts = append(opts, WithGrpcInsecure(insecure))
 		case "leaderProvider":
 			typ, target, ok := strings.Cut(value, ":")
 			if !ok {

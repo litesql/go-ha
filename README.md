@@ -31,6 +31,7 @@ Go database/sql base driver providing high availability for SQLite databases.
 | disablePublisher     | Disables the publisher for replication.                              | false           |
 | disableDBSnapshotter | Disables the database snapshotter used for initial synchronization.                            | false           |
 | disableDDLSync       | Disables the synchronization of DDL (Data Definition Language) changes across nodes.          | false           |
+| grpcInsecure         | Insecure gRPC connections | false    |   
 | grpcPort             | TCP port for the gRPC server                                       |      |  
 | grpcTimeout          | Timeout for the gRPC operations                                 | 5s   |
 | grpcToken            | Token to protect gRPC server |     |   

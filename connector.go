@@ -60,6 +60,7 @@ type ConnHooksConfig struct {
 	Leader               LeaderProvider
 	GrpcTimeout          time.Duration
 	GrpcToken            string
+	GrpcInsecure         bool
 	QueryRouter          *regexp.Regexp
 }
 
@@ -205,10 +206,11 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		TxSeqTrackerProvider: func() TxSeqTracker {
 			return c.subscriber
 		},
-		Leader:      c.leaderProvider,
-		GrpcTimeout: c.grpcTimeout,
-		GrpcToken:   c.grpcToken,
-		QueryRouter: c.queryRouter,
+		Leader:       c.leaderProvider,
+		GrpcTimeout:  c.grpcTimeout,
+		GrpcToken:    c.grpcToken,
+		GrpcInsecure: c.grpcInsecure,
+		QueryRouter:  c.queryRouter,
 	})
 	c.db = sql.OpenDB(&c)
 	c.closers = append(c.closers, c.db)
@@ -366,9 +368,10 @@ type Connector struct {
 	db          *sql.DB
 	queryRouter *regexp.Regexp
 
-	grpcPort    int
-	grpcTimeout time.Duration
-	grpcToken   string
+	grpcPort     int
+	grpcTimeout  time.Duration
+	grpcToken    string
+	grpcInsecure bool
 
 	closers []io.Closer
 }

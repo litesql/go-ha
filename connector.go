@@ -560,11 +560,11 @@ func (c *Connector) Close() {
 				if !ncs.client.IsClosed() {
 					ncs.client.Close()
 				}
-				ncs.server.WaitForShutdown()
+				go ncs.server.Shutdown()
 				delete(natsClientServers, c.embeddedNatsConfig)
+				ncs.server.WaitForShutdown()
 			}
 		}
-		return
 	}
 
 	if c.grpcPort > 0 {

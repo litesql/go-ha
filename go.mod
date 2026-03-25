@@ -6,9 +6,9 @@ require (
 	connectrpc.com/connect v1.19.1
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/nats-io/graft v0.0.0-20250422222653-97395d62ec95
-	github.com/nats-io/nats-server/v2 v2.12.5
-	github.com/nats-io/nats.go v1.49.0
+	github.com/nats-io/graft v0.0.0-20260325174230-f9e6710ae36e
+	github.com/nats-io/nats-server/v2 v2.12.6
+	github.com/nats-io/nats.go v1.50.0
 	github.com/rqlite/sql v0.0.0-20260224021119-1b2524a41372
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11

@@ -560,9 +560,13 @@ func (c *Connector) Close() {
 				if !ncs.client.IsClosed() {
 					ncs.client.Close()
 				}
-				go ncs.server.Shutdown()
 				delete(natsClientServers, c.embeddedNatsConfig)
-				ncs.server.WaitForShutdown()
+				if ncs.server.Running() {
+					go func() {
+						defer recover()
+						ncs.server.Shutdown()
+					}()
+				}
 			}
 		}
 	}

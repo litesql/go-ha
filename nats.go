@@ -65,6 +65,7 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 	}
 	opts.JetStream = true
 	opts.DisableJetStreamBanner = true
+	opts.NoSigs = true
 
 	for _, ncs := range natsClientServers {
 		addr := ncs.server.Addr()

@@ -562,10 +562,8 @@ func (c *Connector) Close() {
 				}
 				delete(natsClientServers, c.embeddedNatsConfig)
 				if ncs.server.Running() {
-					go func() {
-						defer recover()
-						ncs.server.Shutdown()
-					}()
+					go ncs.server.Shutdown()
+					ncs.server.WaitForShutdown()
 				}
 			}
 		}

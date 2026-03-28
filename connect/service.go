@@ -45,15 +45,15 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 	var (
 		hadb HADB
 		db   *sql.DB
+		conn *sql.Conn
 		tx   *sql.Tx
 	)
-	if list := s.ReplicationIDList(); len(list) == 1 {
-		hadb, _ = s.DBProvider(list[0])
-		db = hadb.DB()
-	}
 	defer func() {
 		if tx != nil {
 			tx.Rollback()
+		}
+		if conn != nil {
+			conn.Close()
 		}
 	}()
 	for {
@@ -74,46 +74,59 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 		}
 
 		id := req.GetReplicationId()
-		if id != "" {
-			var ok bool
-			hadb, ok = s.DBProvider(id)
-			if !ok {
-				err := stream.Send(&sqlv1.QueryResponse{
-					Error: fmt.Sprintf("database provider %q not found", req.GetReplicationId()),
-				})
-				if err != nil {
-					return err
-				}
-				continue
+		if id == "" {
+			if list := s.ReplicationIDList(); len(list) == 1 {
+				id = list[0]
 			}
-			newdb := hadb.DB()
-			if newdb == nil {
-				err := stream.Send(&sqlv1.QueryResponse{
-					Error: fmt.Sprintf("database pool for %q not found", req.GetReplicationId()),
-				})
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			if tx != nil && db != newdb {
-				tx.Rollback()
-				tx = nil
-			}
-			db = newdb
 		}
-		sqlQuery := req.GetSql()
-		slog.Debug("gRPC service", "query", sqlQuery)
-
-		if db == nil {
+		var ok bool
+		hadb, ok = s.DBProvider(id)
+		if !ok {
 			err := stream.Send(&sqlv1.QueryResponse{
-				Error: fmt.Sprintf("database not selected, inform a replication_id: %v", s.ReplicationIDList()),
+				Error: fmt.Sprintf("database provider %q not found. Use 'SET DATABASE = ?;' command to choose between available databases: %v", req.GetReplicationId(), s.ReplicationIDList()),
 			})
 			if err != nil {
 				return err
 			}
 			continue
 		}
+
+		newdb := hadb.DB()
+		if newdb == nil {
+			err := stream.Send(&sqlv1.QueryResponse{
+				Error: fmt.Sprintf("database pool for %q not found", req.GetReplicationId()),
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if newdb != db {
+			newConn, err := newdb.Conn(ctx)
+			if err != nil {
+				err := stream.Send(&sqlv1.QueryResponse{
+					Error: fmt.Sprintf("failed to get connection from database pool for %q: %v", req.GetReplicationId(), err),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			if tx != nil {
+				tx.Rollback()
+				tx = nil
+			}
+			if conn != nil {
+				conn.Close()
+				conn = nil
+			}
+			conn = newConn
+			db = newdb
+		}
+
+		sqlQuery := req.GetSql()
+		slog.Debug("gRPC service", "query", sqlQuery)
+
 		upperSQL := strings.ToUpper(sqlQuery)
 		switch {
 		case strings.HasPrefix(upperSQL, "BEGIN"):
@@ -125,7 +138,7 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				}
 				continue
 			}
-			tx, err = db.Begin()
+			tx, err = conn.BeginTx(ctx, nil)
 			if err != nil {
 				err := stream.Send(&sqlv1.QueryResponse{
 					Error: err.Error(),
@@ -193,7 +206,7 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 			if tx != nil {
 				ex = tx
 			} else {
-				ex = db
+				ex = conn
 			}
 
 			params := req.GetParams()
@@ -237,7 +250,6 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 						return err
 					}
 				}
-
 			}
 		}
 	}

@@ -25,6 +25,7 @@ type driverConnFunc func(*sql.Conn) (driver.QueryerContext, error)
 func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedValue, queryRouter *regexp.Regexp, driverConn driverConnFunc) (driver.Rows, error) {
 	slog.Debug("Executing cross-shard query", "query", stmt.Source(), "queryRouter", queryRouter.String())
 	dbs := make([]*sql.DB, 0)
+	selectedDSNs := make([]string, 0)
 	for _, dsn := range ListDSN() {
 		if !queryRouter.MatchString(dsn) {
 			continue
@@ -33,12 +34,15 @@ func CrossShardQuery(ctx context.Context, stmt *Statement, args []driver.NamedVa
 		if connector == nil {
 			continue
 		}
+		selectedDSNs = append(selectedDSNs, dsn)
 		dbs = append(dbs, connector.DB())
 	}
 
 	if len(dbs) == 0 {
 		return nil, fmt.Errorf("no databases available to execute query based on queryRouter=%s", queryRouter.String())
 	}
+
+	slog.Debug("Executing cross-shard query", "query", stmt.Source(), "queryRouter", queryRouter.String(), "selectedDSNs", selectedDSNs)
 	rewrittenQuery, aggregateFunctions, newTempDerivedColumns, err := stmt.RewriteQueryToAggregate()
 	if err != nil {
 		return nil, fmt.Errorf("failed to rewrite query: %w", err)

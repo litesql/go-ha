@@ -74,6 +74,8 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	if err != nil {
 		return
 	}
+	defer conn.Close()
+
 	err = cs.connProvider.DisableHooks(conn)
 	if err != nil {
 		return
@@ -105,6 +107,47 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	}
 
 	_, errStats := conn.ExecContext(context.Background(), "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
+	if errStats != nil {
+		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
+	}
+	err = tx.Commit()
+	return
+}
+
+func (cs *ChangeSet) propagate(ctx context.Context, db *sql.DB) (err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	if cs.interceptor != nil {
+		defer func() {
+			err = cs.interceptor.AfterApply(cs, conn, err)
+		}()
+		skip, err := cs.interceptor.BeforeApply(cs, conn)
+		if err != nil {
+			return err
+		}
+		if skip {
+			return nil
+		}
+	}
+	if len(cs.Changes) == 0 {
+		return nil
+	}
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	err = cs.applyStrategy(cs, tx)
+	if err != nil {
+		return
+	}
+
+	_, errStats := conn.ExecContext(ctx, "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
 	if errStats != nil {
 		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
@@ -195,13 +238,15 @@ func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 			continue
 		}
 		var (
-			err error
-			sql string
+			err  error
+			sql  string
+			args []any
 		)
 		switch change.Operation {
 		case "INSERT":
 			sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
-			_, err = tx.Exec(sql, change.NewValues...)
+			args = change.NewValues
+			_, err = tx.Exec(sql, args...)
 		case "UPDATE":
 			setClause := make([]string, len(change.Columns))
 			for i, col := range change.Columns {
@@ -213,7 +258,7 @@ func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 				whereClause[i] = fmt.Sprintf("%s = ?", col)
 			}
 			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(whereClause, " AND "))
-			args := append(change.NewValues, change.PKOldValues()...)
+			args = append(change.NewValues, change.PKOldValues()...)
 			_, err = tx.Exec(sql, args...)
 		case "DELETE":
 			pkColumns := change.PKColumnsNames()
@@ -222,14 +267,17 @@ func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
 				whereClause[i] = fmt.Sprintf("%s = ?", col)
 			}
 			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
-			_, err = tx.Exec(sql, change.PKOldValues()...)
+			args = change.PKOldValues()
+			_, err = tx.Exec(sql, args...)
 		case "SQL":
 			sql = change.Command
-			_, err = tx.Exec(sql, change.Args...)
+			args = change.Args
+			_, err = tx.Exec(sql, args...)
 		default:
 			slog.Warn("unknown operation", "operation", change.Operation)
 			continue
 		}
+		slog.Debug("applied change", "sql", sql, "args", args)
 		if err != nil {
 			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
 			err = errors.Join(err, tx.Rollback())
@@ -354,6 +402,36 @@ func (c Change) PKNewValues() []any {
 		}
 	}
 	return pkValues
+}
+
+func (c Change) Reverse() Change {
+	return Change{
+		Database:  c.Database,
+		Table:     c.Table,
+		Columns:   c.Columns,
+		PKColumns: c.PKColumns,
+		Operation: reverseOperation(c.Operation),
+		OldRowID:  c.NewRowID,
+		NewRowID:  c.OldRowID,
+		OldValues: c.NewValues,
+		NewValues: c.OldValues,
+		Command:   c.Command,
+		Args:      c.Args,
+		TsNs:      time.Now().UnixNano(),
+	}
+}
+
+func reverseOperation(op string) string {
+	switch op {
+	case "INSERT":
+		return "DELETE"
+	case "DELETE":
+		return "INSERT"
+	case "UPDATE":
+		return "UPDATE"
+	default:
+		return op
+	}
 }
 
 func (c Change) before() map[string]any {

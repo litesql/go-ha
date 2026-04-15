@@ -38,6 +38,10 @@ func (*NoopSubscriber) DeliveredInfo(ctx context.Context, name string) (any, err
 	return "", nil
 }
 
+func (*NoopSubscriber) Undo(ctx context.Context, transactionsCount uint64) error {
+	return nil
+}
+
 func NewNoopSubscriber() *NoopSubscriber {
 	return &NoopSubscriber{}
 }
@@ -252,6 +256,87 @@ func (s *NATSSubscriber) DeliveredInfo(ctx context.Context, name string) (any, e
 	return listInfo, nil
 }
 
+func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var startSeq, total uint64
+	if s.streamSeq < transactionsCount {
+		return fmt.Errorf("cannot undo %d transactions, only %d transactions available in stream", transactionsCount, s.streamSeq)
+	}
+	startSeq = (s.streamSeq - transactionsCount) + 1
+	total = transactionsCount
+	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq, "total", total)
+	cons, err := s.js.CreateConsumer(ctx, s.stream, jetstream.ConsumerConfig{
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		FilterSubject:     s.subject,
+		DeliverPolicy:     jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:       startSeq,
+		MaxAckPending:     int(transactionsCount),
+		InactiveThreshold: 2 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+
+	var undoChangeSet ChangeSet
+	undoChangeSet.ProcessID = processID
+	undoChangeSet.Node = s.node
+	undoChangeSet.Subject = s.subject
+	undoChangeSet.SetApplyStrategy(s.applyStrategy)
+	undoChangeSet.SetConnProvider(s.connProvider)
+	undoChangeSet.SetInterceptor(s.interceptor)
+
+	dedup := make(map[uint64]struct{})
+	done := make(chan struct{})
+	iter, err := cons.Consume(func(msg jetstream.Msg) {
+		meta, err := msg.Metadata()
+		if err != nil {
+			slog.Error("failed to get message metadata for undo", "error", err, "subject", msg.Subject())
+			return
+		}
+		if meta.Sequence.Stream < startSeq {
+			return
+		}
+		if meta.Sequence.Stream >= startSeq+total {
+			return
+		}
+		if _, ok := dedup[meta.Sequence.Stream]; ok {
+			return
+		}
+		dedup[meta.Sequence.Stream] = struct{}{}
+		var cs ChangeSet
+		err = json.Unmarshal(msg.Data(), &cs)
+		if err != nil {
+			slog.Error("failed to unmarshal replication message", "error", err, "stream_seq", cs.StreamSeq)
+			s.ack(msg, meta)
+			return
+		}
+		cs.Changes = reverseChanges(cs.Changes)
+		undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
+		err = msg.Ack()
+		if err != nil {
+			slog.Error("failed to ack message for undo", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
+		}
+		if len(dedup) >= int(total) {
+			done <- struct{}{}
+			return
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		iter.Stop()
+		return undoChangeSet.propagate(ctx, s.db)
+	}
+
+}
+
 func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	meta, err := msg.Metadata()
 	if err != nil {
@@ -310,4 +395,14 @@ func (s *NATSSubscriber) ack(msg jetstream.Msg, meta *jetstream.MsgMetadata) {
 		slog.Error("failed to ack message", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
 	}
 	s.streamSeq = meta.Sequence.Stream
+}
+
+func reverseChanges(changes []Change) []Change {
+	reversed := make([]Change, 0)
+	for _, change := range changes {
+		if change.Operation == "INSERT" || change.Operation == "DELETE" || change.Operation == "UPDATE" {
+			reversed = append(reversed, change.Reverse())
+		}
+	}
+	return reversed
 }

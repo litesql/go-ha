@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -28,6 +29,7 @@ type HADB interface {
 	DB() *sql.DB
 	LatestSnapshot(context.Context) (uint64, io.ReadCloser, error)
 	Backup(context.Context, io.Writer) error
+	Undo(context.Context, uint64) error
 }
 
 type DBProvider func(id string) (HADB, bool)
@@ -196,6 +198,56 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				continue
 			}
 			tx = nil
+			err = stream.Send(&sqlv1.QueryResponse{})
+			if err != nil {
+				return err
+			}
+			continue
+		case strings.HasPrefix(upperSQL, "UNDO "):
+			if tx != nil {
+				err = stream.Send(&sqlv1.QueryResponse{
+					Error: "cannot execute UNDO command within a transaction",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			upperSQL = strings.TrimSpace(upperSQL)
+			upperSQL = strings.ReplaceAll(upperSQL, "\t", " ")
+			upperSQL = strings.ReplaceAll(upperSQL, "\n", " ")
+			upperSQL = strings.ReplaceAll(upperSQL, "\r", " ")
+			upperSQL = strings.TrimSuffix(upperSQL, ";")
+			parts := strings.Fields(upperSQL)
+			if len(parts) != 2 {
+				err = stream.Send(&sqlv1.QueryResponse{
+					Error: "UNDO command requires exactly one argument: UNDO <transactions count>",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			count, err := strconv.Atoi(parts[1])
+			if err != nil || count <= 0 {
+				err = stream.Send(&sqlv1.QueryResponse{
+					Error: "UNDO command requires a positive integer argument: UNDO <transactions count>",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			err = hadb.Undo(ctx, uint64(count))
+			if err != nil {
+				err = stream.Send(&sqlv1.QueryResponse{
+					Error: fmt.Sprintf("failed to undo %d transactions: %v", count, err),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
 			err = stream.Send(&sqlv1.QueryResponse{})
 			if err != nil {
 				return err

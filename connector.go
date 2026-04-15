@@ -545,6 +545,10 @@ func (c *Connector) Undo(ctx context.Context, transactionsCount uint64) error {
 	return c.subscriber.Undo(ctx, transactionsCount)
 }
 
+func (c *Connector) UndoByTime(ctx context.Context, duration time.Duration) error {
+	return c.subscriber.UndoByTime(ctx, duration)
+}
+
 func (c *Connector) Close() {
 	for _, closer := range c.closers {
 		closer.Close()
@@ -701,6 +705,7 @@ type Subscriber interface {
 	RemoveConsumer(ctx context.Context, name string) error
 	DeliveredInfo(ctx context.Context, name string) (any, error)
 	Undo(ctx context.Context, transactionsCount uint64) error
+	UndoByTime(ctx context.Context, duration time.Duration) error
 }
 
 type ChangeSetInterceptor interface {

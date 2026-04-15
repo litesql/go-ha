@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -30,6 +31,7 @@ type HADB interface {
 	LatestSnapshot(context.Context) (uint64, io.ReadCloser, error)
 	Backup(context.Context, io.Writer) error
 	Undo(context.Context, uint64) error
+	UndoByTime(context.Context, time.Duration) error
 }
 
 type DBProvider func(id string) (HADB, bool)
@@ -221,7 +223,7 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 			parts := strings.Fields(upperSQL)
 			if len(parts) != 2 {
 				err = stream.Send(&sqlv1.QueryResponse{
-					Error: "UNDO command requires exactly one argument: UNDO <transactions count>",
+					Error: "UNDO command requires exactly one argument: UNDO <transactions count|time duration>",
 				})
 				if err != nil {
 					return err
@@ -229,10 +231,28 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				continue
 			}
 			count, err := strconv.Atoi(parts[1])
-			if err != nil || count <= 0 {
-				err = stream.Send(&sqlv1.QueryResponse{
-					Error: "UNDO command requires a positive integer argument: UNDO <transactions count>",
-				})
+			if err != nil {
+				duration, err := time.ParseDuration(parts[1])
+				if err != nil {
+					err = stream.Send(&sqlv1.QueryResponse{
+						Error: "UNDO command requires a positive integer argument or a time duration: UNDO <transactions count|time duration>",
+					})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				err = hadb.UndoByTime(ctx, duration)
+				if err != nil {
+					err = stream.Send(&sqlv1.QueryResponse{
+						Error: fmt.Sprintf("failed to undo transactions within %v: %v", duration, err),
+					})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				err = stream.Send(&sqlv1.QueryResponse{})
 				if err != nil {
 					return err
 				}

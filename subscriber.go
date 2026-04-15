@@ -42,6 +42,10 @@ func (*NoopSubscriber) Undo(ctx context.Context, transactionsCount uint64) error
 	return nil
 }
 
+func (*NoopSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
+	return nil
+}
+
 func NewNoopSubscriber() *NoopSubscriber {
 	return &NoopSubscriber{}
 }
@@ -267,14 +271,37 @@ func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) err
 	startSeq = (max - transactionsCount) + 1
 	total = transactionsCount
 	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq, "total", total)
-	cons, err := s.js.CreateConsumer(ctx, s.stream, jetstream.ConsumerConfig{
+	return s.undo(ctx, jetstream.ConsumerConfig{
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		FilterSubject:     s.subject,
 		DeliverPolicy:     jetstream.DeliverByStartSequencePolicy,
 		OptStartSeq:       startSeq,
-		MaxAckPending:     int(transactionsCount),
+		MaxAckPending:     1,
 		InactiveThreshold: 2 * time.Second,
-	})
+	}, max)
+}
+
+func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
+	startTime := time.Now().Add(-duration)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	max := s.streamSeq
+	if duration <= 0 {
+		return fmt.Errorf("duration must be greater than 0")
+	}
+	slog.Debug("starting undo", "subject", s.subject, "start_time", startTime)
+	return s.undo(ctx, jetstream.ConsumerConfig{
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		FilterSubject:     s.subject,
+		DeliverPolicy:     jetstream.DeliverByStartTimePolicy,
+		OptStartTime:      &startTime,
+		MaxAckPending:     1,
+		InactiveThreshold: 2 * time.Second,
+	}, max)
+}
+
+func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, max uint64) error {
+	cons, err := s.js.CreateConsumer(ctx, s.stream, cc)
 	if err != nil {
 		return err
 	}
@@ -295,13 +322,11 @@ func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) err
 			slog.Error("failed to get message metadata for undo", "error", err, "subject", msg.Subject())
 			return
 		}
-		if meta.Sequence.Stream < startSeq {
-			return
-		}
-		if meta.Sequence.Stream >= startSeq+total {
-			return
-		}
 		if _, ok := dedup[meta.Sequence.Stream]; ok {
+			err = msg.Ack()
+			if err != nil {
+				slog.Error("failed to ack message for undo", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
+			}
 			return
 		}
 		dedup[meta.Sequence.Stream] = struct{}{}
@@ -317,7 +342,7 @@ func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) err
 		if err != nil {
 			slog.Error("failed to ack message for undo", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
 		}
-		if len(dedup) >= int(total) || meta.Sequence.Stream >= max {
+		if meta.Sequence.Stream >= max {
 			done <- struct{}{}
 			return
 		}

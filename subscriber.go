@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	haconnect "github.com/litesql/go-ha/connect"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -39,7 +40,15 @@ func (*NoopSubscriber) DeliveredInfo(ctx context.Context, name string) (any, err
 	return "", nil
 }
 
-func (*NoopSubscriber) Undo(ctx context.Context, transactionsCount uint64) error {
+func (*NoopSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error) {
+	return nil, nil
+}
+
+func (*NoopSubscriber) HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error) {
+	return nil, nil
+}
+
+func (*NoopSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
 	return nil
 }
 
@@ -65,7 +74,7 @@ type NATSSubscriber struct {
 	db            *sql.DB
 	connProvider  ConnHooksProvider
 	interceptor   ChangeSetInterceptor
-	applyStrategy applyStrategyFn
+	applyStrategy sqlStrategy
 }
 
 type NATSSubscriberConfig struct {
@@ -130,14 +139,14 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 		return nil, err
 	}
 
-	var applyStrategy applyStrategyFn
+	var strategy sqlStrategy
 	switch cfg.RowIdentify {
 	case PK:
-		applyStrategy = pkIdentifyStrategy
+		strategy = pkIdentifyStrategy{}
 	case Rowid:
-		applyStrategy = rowidIdentifyStrategy
+		strategy = rowidIdentifyStrategy{}
 	case Full:
-		applyStrategy = fullIdentifyStrategy
+		strategy = fullIdentifyStrategy{}
 	default:
 		return nil, fmt.Errorf("invalid row identify strategy: %v", cfg.RowIdentify)
 	}
@@ -152,7 +161,7 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 		db:            cfg.DB,
 		connProvider:  cfg.ConnProvider,
 		interceptor:   cfg.Interceptor,
-		applyStrategy: applyStrategy,
+		applyStrategy: strategy,
 	}
 
 	consumer, err := s.js.CreateConsumer(context.Background(), s.stream, jetstream.ConsumerConfig{
@@ -261,17 +270,55 @@ func (s *NATSSubscriber) DeliveredInfo(ctx context.Context, name string) (any, e
 	return listInfo, nil
 }
 
-func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) error {
+func (s *NATSSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error) {
+	max := s.streamSeq
+	if startSeq == 0 {
+		startSeq = max
+	}
+	if startSeq == 0 || startSeq > max {
+		return nil, fmt.Errorf("cannot retrieve history from %d transactions sequence, only %d transactions available in stream", startSeq, s.streamSeq)
+	}
+
+	slog.Debug("retrieve history", "subject", s.subject, "start_seq", startSeq)
+	return s.history(ctx, jetstream.ConsumerConfig{
+		AckPolicy:         jetstream.AckExplicitPolicy,
+		FilterSubject:     s.subject,
+		DeliverPolicy:     jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:       startSeq,
+		MaxAckPending:     1,
+		InactiveThreshold: 2 * time.Second,
+	}, max)
+}
+
+func (s *NATSSubscriber) HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error) {
+	startTime := time.Now().Add(-duration)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	max := s.streamSeq
-	var startSeq, total uint64
-	if max < transactionsCount {
-		return fmt.Errorf("cannot undo %d transactions, only %d transactions available in stream", transactionsCount, s.streamSeq)
+	if duration <= 0 {
+		return nil, fmt.Errorf("duration must be greater than 0")
 	}
-	startSeq = (max - transactionsCount) + 1
-	total = transactionsCount
-	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq, "total", total)
+	slog.Debug("retrieve history by time", "subject", s.subject, "start_time", startTime)
+	return s.history(ctx, jetstream.ConsumerConfig{
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject: s.subject,
+		DeliverPolicy: jetstream.DeliverByStartTimePolicy,
+		OptStartTime:  &startTime,
+		MaxAckPending: 1,
+	}, max)
+}
+
+func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	max := s.streamSeq
+	if startSeq == 0 {
+		startSeq = max
+	}
+	if startSeq == 0 || startSeq > max {
+		return fmt.Errorf("invalid transaction sequence %d, current stream sequence is %d", startSeq, max)
+	}
+	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq)
 	return s.undo(ctx, jetstream.ConsumerConfig{
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		FilterSubject:     s.subject,
@@ -290,17 +337,82 @@ func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration)
 	if duration <= 0 {
 		return fmt.Errorf("duration must be greater than 0")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*duration)
-	defer cancel()
 	slog.Debug("starting undo by time", "subject", s.subject, "start_time", startTime)
 	return s.undo(ctx, jetstream.ConsumerConfig{
-		AckPolicy:         jetstream.AckExplicitPolicy,
-		FilterSubject:     s.subject,
-		DeliverPolicy:     jetstream.DeliverByStartTimePolicy,
-		OptStartTime:      &startTime,
-		MaxAckPending:     1,
-		InactiveThreshold: 2 * time.Second,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject: s.subject,
+		DeliverPolicy: jetstream.DeliverByStartTimePolicy,
+		OptStartTime:  &startTime,
+		MaxAckPending: 1,
 	}, max)
+}
+
+func (s *NATSSubscriber) history(ctx context.Context, cc jetstream.ConsumerConfig, max uint64) ([]haconnect.HistoryItem, error) {
+	cons, err := s.js.CreateConsumer(ctx, s.stream, cc)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]haconnect.HistoryItem, 0)
+	dedup := make(map[uint64]struct{})
+	done := make(chan struct{})
+	var hasData bool
+	iter, err := cons.Consume(func(msg jetstream.Msg) {
+		hasData = true
+		meta, err := msg.Metadata()
+		if err != nil {
+			slog.Error("failed to get message metadata for history", "error", err, "subject", msg.Subject())
+			return
+		}
+		if _, ok := dedup[meta.Sequence.Stream]; ok {
+			err = msg.Ack()
+			if err != nil {
+				slog.Error("failed to ack message for history", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
+			}
+			return
+		}
+		dedup[meta.Sequence.Stream] = struct{}{}
+		var cs ChangeSet
+		err = json.Unmarshal(msg.Data(), &cs)
+		if err != nil {
+			slog.Error("failed to unmarshal replication message", "error", err, "stream_seq", cs.StreamSeq)
+			s.ack(msg, meta)
+			return
+		}
+		cs.StreamSeq = meta.Sequence.Stream
+		cs.SetStrategy(s.applyStrategy)
+		item := cs.toItem()
+		if len(item.SQL) > 0 {
+			items = append(items, item)
+		}
+		err = msg.Ack()
+		if err != nil {
+			slog.Error("failed to ack message for undo", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
+		}
+		if meta.Sequence.Stream >= max {
+			done <- struct{}{}
+			return
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		select {
+		case <-iter.Closed():
+			return nil, fmt.Errorf("consumer was closed while retrieving history")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-done:
+			iter.Stop()
+			return items, nil
+		case <-time.After(30 * time.Second):
+			if !hasData {
+				return nil, fmt.Errorf("timed out: no history data available in stream")
+			}
+		}
+	}
 }
 
 func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, max uint64) error {
@@ -313,13 +425,15 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 	undoChangeSet.ProcessID = processID
 	undoChangeSet.Node = s.node
 	undoChangeSet.Subject = s.subject
-	undoChangeSet.SetApplyStrategy(s.applyStrategy)
+	undoChangeSet.SetStrategy(s.applyStrategy)
 	undoChangeSet.SetConnProvider(s.connProvider)
 	undoChangeSet.SetInterceptor(s.interceptor)
 
 	dedup := make(map[uint64]struct{})
-	done := make(chan struct{})
+	done := make(chan struct{}, 1)
+	var hasData bool
 	iter, err := cons.Consume(func(msg jetstream.Msg) {
+		hasData = true
 		meta, err := msg.Metadata()
 		if err != nil {
 			slog.Error("failed to get message metadata for undo", "error", err, "subject", msg.Subject())
@@ -354,16 +468,23 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 		return err
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-		iter.Stop()
-		undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
-		slices.Reverse(undoChangeSet.Changes)
-		return undoChangeSet.propagate(ctx, s.db)
+	for {
+		select {
+		case <-iter.Closed():
+			return fmt.Errorf("consumer was closed while retrieving history for undo")
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			iter.Stop()
+			undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
+			slices.Reverse(undoChangeSet.Changes)
+			return undoChangeSet.propagate(ctx, s.db)
+		case <-time.After(30 * time.Second):
+			if !hasData {
+				return fmt.Errorf("timed out: no history data available in stream for undo")
+			}
+		}
 	}
-
 }
 
 func (s *NATSSubscriber) handler(msg jetstream.Msg) {
@@ -375,7 +496,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 	var cs ChangeSet
 	cs.StreamSeq = meta.Sequence.Stream
 	cs.Subject = s.subject
-	cs.SetApplyStrategy(s.applyStrategy)
+	cs.SetStrategy(s.applyStrategy)
 	cs.SetConnProvider(s.connProvider)
 	cs.SetInterceptor(s.interceptor)
 	err = json.Unmarshal(msg.Data(), &cs)

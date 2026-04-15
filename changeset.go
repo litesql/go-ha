@@ -10,35 +10,40 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	haconnect "github.com/litesql/go-ha/connect"
 )
 
 const controlTableName = "ha_stats"
 
 type ChangeSet struct {
-	interceptor   ChangeSetInterceptor
-	connProvider  ConnHooksProvider
-	applyStrategy applyStrategyFn
-	Node          string   `json:"node"`
-	ProcessID     int64    `json:"process_id"`
-	Filename      string   `json:"filename"`
-	Changes       []Change `json:"changes"`
-	Timestamp     int64    `json:"timestamp_ns"`
-	Subject       string   `json:"-"`
-	StreamSeq     uint64   `json:"-"`
+	interceptor  ChangeSetInterceptor
+	connProvider ConnHooksProvider
+	strategy     sqlStrategy
+	Node         string   `json:"node"`
+	ProcessID    int64    `json:"process_id"`
+	Filename     string   `json:"filename"`
+	Changes      []Change `json:"changes"`
+	Timestamp    int64    `json:"timestamp_ns"`
+	Subject      string   `json:"-"`
+	StreamSeq    uint64   `json:"-"`
 }
 
-type applyStrategyFn func(*ChangeSet, *sql.Tx) error
+type sqlStrategy interface {
+	ToSQL(Change) (string, []any)
+}
+
+var defaultStrategy = pkIdentifyStrategy{}
 
 func NewChangeSet(node string, replicationID string) *ChangeSet {
 	return &ChangeSet{
-		Node:          node,
-		Filename:      replicationID,
-		applyStrategy: pkIdentifyStrategy,
+		Node:     node,
+		Filename: replicationID,
+		strategy: defaultStrategy,
 	}
 }
 
-func (cs *ChangeSet) SetApplyStrategy(fn applyStrategyFn) {
-	cs.applyStrategy = fn
+func (cs *ChangeSet) SetStrategy(t sqlStrategy) {
+	cs.strategy = t
 }
 
 func (cs *ChangeSet) SetInterceptor(interceptor ChangeSetInterceptor) {
@@ -101,9 +106,21 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		return
 	}
 	defer tx.Rollback()
-	err = cs.applyStrategy(cs, tx)
-	if err != nil {
-		return
+	for _, change := range cs.Changes {
+		if change.Table == controlTableName {
+			continue
+		}
+		sql, args := cs.strategy.ToSQL(change)
+		if sql == "" {
+			continue
+		}
+		slog.Debug("applying change", "sql", sql, "args", args)
+		_, err = tx.Exec(sql, args...)
+		if err != nil {
+			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
+			err = errors.Join(err, tx.Rollback())
+			return err
+		}
 	}
 
 	_, errStats := conn.ExecContext(context.Background(), "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
@@ -113,6 +130,28 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	}
 	err = tx.Commit()
 	return
+}
+
+func (cs *ChangeSet) toItem() haconnect.HistoryItem {
+	sqlList := make([]string, 0, len(cs.Changes))
+	for _, change := range cs.Changes {
+		if change.Table == controlTableName {
+			continue
+		}
+		sql, args := cs.strategy.ToSQL(change)
+		if sql == "" {
+			continue
+		}
+		if len(args) > 0 {
+			sql = fmt.Sprintf("%s -- args: %v", sql, args)
+		}
+		sqlList = append(sqlList, sql)
+	}
+	return haconnect.HistoryItem{
+		Seq:       cs.StreamSeq,
+		SQL:       sqlList,
+		Timestamp: cs.Timestamp,
+	}
 }
 
 func (cs *ChangeSet) propagate(ctx context.Context, db *sql.DB) (err error) {
@@ -142,16 +181,23 @@ func (cs *ChangeSet) propagate(ctx context.Context, db *sql.DB) (err error) {
 		return
 	}
 	defer tx.Rollback()
-	err = cs.applyStrategy(cs, tx)
-	if err != nil {
-		return
+	for _, change := range cs.Changes {
+		if change.Table == controlTableName {
+			continue
+		}
+		sql, args := cs.strategy.ToSQL(change)
+		if sql == "" {
+			continue
+		}
+		slog.Debug("propagating change", "sql", sql, "args", args)
+		_, err = tx.Exec(sql, args...)
+		if err != nil {
+			slog.Error("failed to propagate change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
+			err = errors.Join(err, tx.Rollback())
+			return err
+		}
 	}
 
-	_, errStats := conn.ExecContext(ctx, "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
-		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
-	if errStats != nil {
-		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
-	}
 	err = tx.Commit()
 	return
 }
@@ -175,7 +221,7 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 		default:
 			continue
 		}
-		data.Payload.Source.Version = "0.8.0"
+		data.Payload.Source.Version = "0.10.0"
 		data.Payload.Source.Connector = "go-ha-connector"
 		data.Payload.Source.Name = cs.Filename
 		data.Payload.Source.DB = change.Database
@@ -188,147 +234,96 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 	return list
 }
 
-func fullIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
-	for _, change := range cs.Changes {
-		if change.Table == controlTableName {
-			continue
+type fullIdentifyStrategy struct{}
+
+func (fullIdentifyStrategy) ToSQL(change Change) (string, []any) {
+	var sql string
+	var args []any
+	switch change.Operation {
+	case "INSERT":
+		sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
+		args = change.NewValues
+	case "UPDATE":
+		setClause := make([]string, len(change.Columns))
+		for i, col := range change.Columns {
+			setClause[i] = fmt.Sprintf("%s = ?", col)
 		}
-		var (
-			err error
-			sql string
-		)
-		switch change.Operation {
-		case "INSERT":
-			sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
-			_, err = tx.Exec(sql, change.NewValues...)
-		case "UPDATE":
-			setClause := make([]string, len(change.Columns))
-			for i, col := range change.Columns {
-				setClause[i] = fmt.Sprintf("%s = ?", col)
-			}
-			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(setClause, " AND "))
-			args := append(change.NewValues, change.OldValues...)
-			_, err = tx.Exec(sql, args...)
-		case "DELETE":
-			whereClause := make([]string, len(change.Columns))
-			for i, col := range change.Columns {
-				whereClause[i] = fmt.Sprintf("%s = ?", col)
-			}
-			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
-			_, err = tx.Exec(sql, change.OldValues...)
-		case "SQL":
-			sql = change.Command
-			_, err = tx.Exec(sql, change.Args...)
-		default:
-			slog.Warn("unknown operation", "operation", change.Operation)
-			continue
+		sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(setClause, " AND "))
+		args = append(change.NewValues, change.OldValues...)
+	case "DELETE":
+		whereClause := make([]string, len(change.Columns))
+		for i, col := range change.Columns {
+			whereClause[i] = fmt.Sprintf("%s = ?", col)
 		}
-		if err != nil {
-			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
-			err = errors.Join(err, tx.Rollback())
-			return err
-		}
+		sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
+		args = change.OldValues
+	case "SQL":
+		sql = change.Command
+		args = change.Args
 	}
-	return nil
+	return sql, args
 }
 
-func pkIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
-	for _, change := range cs.Changes {
-		if change.Table == controlTableName {
-			continue
+type pkIdentifyStrategy struct{}
+
+func (pkIdentifyStrategy) ToSQL(change Change) (string, []any) {
+	var sql string
+	var args []any
+	switch change.Operation {
+	case "INSERT":
+		sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
+		args = change.NewValues
+	case "UPDATE":
+		setClause := make([]string, len(change.Columns))
+		for i, col := range change.Columns {
+			setClause[i] = fmt.Sprintf("%s = ?", col)
 		}
-		var (
-			err  error
-			sql  string
-			args []any
-		)
-		switch change.Operation {
-		case "INSERT":
-			sql = fmt.Sprintf("REPLACE INTO %s.%s (%s) VALUES (%s)", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)))
-			args = change.NewValues
-			_, err = tx.Exec(sql, args...)
-		case "UPDATE":
-			setClause := make([]string, len(change.Columns))
-			for i, col := range change.Columns {
-				setClause[i] = fmt.Sprintf("%s = ?", col)
-			}
-			pkColumns := change.PKColumnsNames()
-			whereClause := make([]string, len(pkColumns))
-			for i, col := range pkColumns {
-				whereClause[i] = fmt.Sprintf("%s = ?", col)
-			}
-			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(whereClause, " AND "))
-			args = append(change.NewValues, change.PKOldValues()...)
-			_, err = tx.Exec(sql, args...)
-		case "DELETE":
-			pkColumns := change.PKColumnsNames()
-			whereClause := make([]string, len(pkColumns))
-			for i, col := range pkColumns {
-				whereClause[i] = fmt.Sprintf("%s = ?", col)
-			}
-			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
-			args = change.PKOldValues()
-			_, err = tx.Exec(sql, args...)
-		case "SQL":
-			sql = change.Command
-			args = change.Args
-			_, err = tx.Exec(sql, args...)
-		default:
-			slog.Warn("unknown operation", "operation", change.Operation)
-			continue
+		pkColumns := change.PKColumnsNames()
+		whereClause := make([]string, len(pkColumns))
+		for i, col := range pkColumns {
+			whereClause[i] = fmt.Sprintf("%s = ?", col)
 		}
-		slog.Debug("applied change", "sql", sql, "args", args)
-		if err != nil {
-			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
-			err = errors.Join(err, tx.Rollback())
-			return err
+		sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE %s", change.Database, change.Table, strings.Join(setClause, ", "), strings.Join(whereClause, " AND "))
+		args = append(change.NewValues, change.PKOldValues()...)
+	case "DELETE":
+		pkColumns := change.PKColumnsNames()
+		whereClause := make([]string, len(pkColumns))
+		for i, col := range pkColumns {
+			whereClause[i] = fmt.Sprintf("%s = ?", col)
 		}
+		sql = fmt.Sprintf("DELETE FROM %s.%s WHERE %s", change.Database, change.Table, strings.Join(whereClause, " AND "))
+		args = change.PKOldValues()
+	case "SQL":
+		sql = change.Command
+		args = change.Args
 	}
-	return nil
+	return sql, args
 }
 
-func rowidIdentifyStrategy(cs *ChangeSet, tx *sql.Tx) error {
-	for _, change := range cs.Changes {
-		if change.Table == controlTableName {
-			continue
+type rowidIdentifyStrategy struct{}
+
+func (rowidIdentifyStrategy) ToSQL(change Change) (string, []any) {
+	var sql string
+	var args []any
+	switch change.Operation {
+	case "INSERT":
+		sql = fmt.Sprintf("INSERT INTO %s.%s (%s, `rowid`) VALUES (%s) ON CONFLICT DO UPDATE SET %s, `rowid` = ?", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)+1), strings.Join(change.Columns, " = ?, "))
+		args = append(change.NewValues, change.NewRowID)
+	case "UPDATE":
+		setClause := make([]string, len(change.Columns))
+		for i, col := range change.Columns {
+			setClause[i] = fmt.Sprintf("%s = ?", col)
 		}
-		var (
-			err error
-			sql string
-		)
-		switch change.Operation {
-		case "INSERT":
-			setClause := make([]string, len(change.Columns))
-			for i, col := range change.Columns {
-				setClause[i] = fmt.Sprintf("%s = ?%d", col, i+1)
-			}
-			sql = fmt.Sprintf("INSERT INTO %s.%s (%s, `rowid`) VALUES (%s) ON CONFLICT DO UPDATE SET %s, `rowid` = ?%d;", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)+1), strings.Join(setClause, ", "), len(change.NewValues)+1)
-			_, err = tx.Exec(sql, append(change.NewValues, change.NewRowID)...)
-		case "UPDATE":
-			setClause := make([]string, len(change.Columns))
-			for i, col := range change.Columns {
-				setClause[i] = fmt.Sprintf("%s = ?", col)
-			}
-			sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE `rowid` = ?;", change.Database, change.Table, strings.Join(setClause, ", "))
-			args := append(change.NewValues, change.OldRowID)
-			_, err = tx.Exec(sql, args...)
-		case "DELETE":
-			sql = fmt.Sprintf("DELETE FROM %s.%s WHERE `rowid` = ?;", change.Database, change.Table)
-			_, err = tx.Exec(sql, change.OldRowID)
-		case "SQL":
-			sql = change.Command
-			_, err = tx.Exec(sql, change.Args...)
-		default:
-			slog.Warn("unknown operation", "operation", change.Operation)
-			continue
-		}
-		if err != nil {
-			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
-			err = errors.Join(err, tx.Rollback())
-			return err
-		}
+		sql = fmt.Sprintf("UPDATE %s.%s SET %s WHERE `rowid` = ?", change.Database, change.Table, strings.Join(setClause, ", "))
+		args = append(change.NewValues, change.OldRowID)
+	case "DELETE":
+		sql = fmt.Sprintf("DELETE FROM %s.%s WHERE `rowid` = ?", change.Database, change.Table)
+		args = []any{change.OldRowID}
+	case "SQL":
+		sql = change.Command
+		args = change.Args
 	}
-	return nil
+	return sql, args
 }
 
 func placeholders(n int) string {
@@ -427,8 +422,6 @@ func reverseOperation(op string) string {
 		return "DELETE"
 	case "DELETE":
 		return "INSERT"
-	case "UPDATE":
-		return "UPDATE"
 	default:
 		return op
 	}

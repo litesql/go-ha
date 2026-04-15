@@ -25,12 +25,43 @@ type Service struct {
 	SQLExpectResultSet SQLExpectResultSetFn
 }
 
+type HistoryItem struct {
+	Seq       uint64   `json:"seq"`
+	SQL       []string `json:"sql"`
+	Timestamp int64    `json:"timestamp_ns"`
+}
+
+func historyToData(items []HistoryItem) *sqlv1.Data {
+	var data sqlv1.Data
+	data.Columns = []string{"seq", "sql", "timestamp"}
+	for _, item := range items {
+		seq, _ := ToAnypb(item.Seq)
+		sqls := make([]string, len(item.SQL))
+		for i, sql := range item.SQL {
+			sqls[i] = strings.TrimSuffix(sql, ";")
+		}
+		sqlListAny, _ := ToAnypb(strings.Join(sqls, ";\n"))
+		timestamp, _ := ToAnypb(time.Unix(0, item.Timestamp))
+		data.Rows = append(data.Rows, &sqlv1.Row{
+			Values: []*anypb.Any{
+				seq,
+				sqlListAny,
+				timestamp,
+			},
+		})
+	}
+
+	return &data
+}
+
 type HADB interface {
 	PubSeq() uint64
 	DB() *sql.DB
 	LatestSnapshot(context.Context) (uint64, io.ReadCloser, error)
 	Backup(context.Context, io.Writer) error
-	Undo(context.Context, uint64) error
+	HistoryBySeq(context.Context, uint64) ([]HistoryItem, error)
+	HistoryByTime(context.Context, time.Duration) ([]HistoryItem, error)
+	UndoBySeq(context.Context, uint64) error
 	UndoByTime(context.Context, time.Duration) error
 }
 
@@ -205,7 +236,73 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				return err
 			}
 			continue
-		case strings.HasPrefix(upperSQL, "UNDO "):
+		case strings.HasPrefix(upperSQL, "HISTORY"):
+			sqlQuery = strings.TrimSpace(sqlQuery)
+			sqlQuery = strings.ReplaceAll(sqlQuery, "\t", " ")
+			sqlQuery = strings.ReplaceAll(sqlQuery, "\n", " ")
+			sqlQuery = strings.ReplaceAll(sqlQuery, "\r", " ")
+			sqlQuery = strings.TrimSuffix(sqlQuery, ";")
+			parts := strings.Fields(sqlQuery)
+			var seq uint64
+			if len(parts) > 2 {
+				err = stream.Send(&sqlv1.QueryResponse{
+					Error: "HISTORY command requires exactly one optional argument: HISTORY <stream sequence|time duration>",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			if len(parts) == 2 {
+				seq, err = strconv.ParseUint(parts[1], 10, 64)
+				if err != nil {
+					duration, err := time.ParseDuration(parts[1])
+					if err != nil {
+						err = stream.Send(&sqlv1.QueryResponse{
+							Error: fmt.Sprintf("HISTORY command got %q but requires a positive integer argument or a time duration: HISTORY <stream sequence|time duration>", parts[1]),
+						})
+						if err != nil {
+							return err
+						}
+						continue
+					}
+					items, err := hadb.HistoryByTime(ctx, duration)
+					if err != nil {
+						err = stream.Send(&sqlv1.QueryResponse{
+							Error: fmt.Sprintf("failed to retrieve history within %v: %v", duration, err),
+						})
+						if err != nil {
+							return err
+						}
+						continue
+					}
+					err = stream.Send(&sqlv1.QueryResponse{
+						ResultSet: historyToData(items),
+					})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			items, err := hadb.HistoryBySeq(ctx, seq)
+			if err != nil {
+				err = stream.Send(&sqlv1.QueryResponse{
+					Error: fmt.Sprintf("failed to retrieve history: %v", err),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			err = stream.Send(&sqlv1.QueryResponse{
+				ResultSet: historyToData(items),
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		case strings.HasPrefix(upperSQL, "UNDO"):
 			if tx != nil {
 				err = stream.Send(&sqlv1.QueryResponse{
 					Error: "cannot execute UNDO command within a transaction",
@@ -221,47 +318,50 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 			sqlQuery = strings.ReplaceAll(sqlQuery, "\r", " ")
 			sqlQuery = strings.TrimSuffix(sqlQuery, ";")
 			parts := strings.Fields(sqlQuery)
-			if len(parts) != 2 {
+			if len(parts) > 2 {
 				err = stream.Send(&sqlv1.QueryResponse{
-					Error: "UNDO command requires exactly one argument: UNDO <transactions count|time duration>",
+					Error: "UNDO command requires exactly one argument: UNDO <stream sequence|time duration>",
 				})
 				if err != nil {
 					return err
 				}
 				continue
 			}
-			count, err := strconv.Atoi(parts[1])
-			if err != nil {
-				duration, err := time.ParseDuration(parts[1])
+			var seq uint64
+			if len(parts) == 2 {
+				seq, err = strconv.ParseUint(parts[1], 10, 64)
 				if err != nil {
-					err = stream.Send(&sqlv1.QueryResponse{
-						Error: fmt.Sprintf("UNDO command got %q but requires a positive integer argument or a time duration: UNDO <transactions count|time duration>", parts[1]),
-					})
+					duration, err := time.ParseDuration(parts[1])
+					if err != nil {
+						err = stream.Send(&sqlv1.QueryResponse{
+							Error: fmt.Sprintf("UNDO command got %q but requires a positive integer argument or a time duration: UNDO <stream sequence|time duration>", parts[1]),
+						})
+						if err != nil {
+							return err
+						}
+						continue
+					}
+					err = hadb.UndoByTime(ctx, duration)
+					if err != nil {
+						err = stream.Send(&sqlv1.QueryResponse{
+							Error: fmt.Sprintf("failed to undo transactions within %v: %v", duration, err),
+						})
+						if err != nil {
+							return err
+						}
+						continue
+					}
+					err = stream.Send(&sqlv1.QueryResponse{})
 					if err != nil {
 						return err
 					}
 					continue
 				}
-				err = hadb.UndoByTime(ctx, duration)
-				if err != nil {
-					err = stream.Send(&sqlv1.QueryResponse{
-						Error: fmt.Sprintf("failed to undo transactions within %v: %v", duration, err),
-					})
-					if err != nil {
-						return err
-					}
-					continue
-				}
-				err = stream.Send(&sqlv1.QueryResponse{})
-				if err != nil {
-					return err
-				}
-				continue
 			}
-			err = hadb.Undo(ctx, uint64(count))
+			err = hadb.UndoBySeq(ctx, seq)
 			if err != nil {
 				err = stream.Send(&sqlv1.QueryResponse{
-					Error: fmt.Sprintf("failed to undo %d transactions: %v", count, err),
+					Error: fmt.Sprintf("failed to undo transactions from stream sequence %d: %v", seq, err),
 				})
 				if err != nil {
 					return err

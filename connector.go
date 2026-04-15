@@ -541,8 +541,16 @@ func (c *Connector) LeaderProvider() LeaderProvider {
 	return c.leaderProvider
 }
 
-func (c *Connector) Undo(ctx context.Context, transactionsCount uint64) error {
-	return c.subscriber.Undo(ctx, transactionsCount)
+func (c *Connector) HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error) {
+	return c.subscriber.HistoryBySeq(ctx, startSeq)
+}
+
+func (c *Connector) HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error) {
+	return c.subscriber.HistoryByTime(ctx, duration)
+}
+
+func (c *Connector) UndoBySeq(ctx context.Context, startSeq uint64) error {
+	return c.subscriber.UndoBySeq(ctx, startSeq)
 }
 
 func (c *Connector) UndoByTime(ctx context.Context, duration time.Duration) error {
@@ -704,7 +712,9 @@ type Subscriber interface {
 	Start() error
 	RemoveConsumer(ctx context.Context, name string) error
 	DeliveredInfo(ctx context.Context, name string) (any, error)
-	Undo(ctx context.Context, transactionsCount uint64) error
+	HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error)
+	HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error)
+	UndoBySeq(ctx context.Context, startSeq uint64) error
 	UndoByTime(ctx context.Context, duration time.Duration) error
 }
 

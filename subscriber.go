@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -289,7 +290,9 @@ func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration)
 	if duration <= 0 {
 		return fmt.Errorf("duration must be greater than 0")
 	}
-	slog.Debug("starting undo", "subject", s.subject, "start_time", startTime)
+	ctx, cancel := context.WithTimeout(ctx, 2*duration)
+	defer cancel()
+	slog.Debug("starting undo by time", "subject", s.subject, "start_time", startTime)
 	return s.undo(ctx, jetstream.ConsumerConfig{
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		FilterSubject:     s.subject,
@@ -357,6 +360,7 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 	case <-done:
 		iter.Stop()
 		undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
+		slices.Reverse(undoChangeSet.Changes)
 		return undoChangeSet.propagate(ctx, s.db)
 	}
 

@@ -215,12 +215,12 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				}
 				continue
 			}
-			upperSQL = strings.TrimSpace(upperSQL)
-			upperSQL = strings.ReplaceAll(upperSQL, "\t", " ")
-			upperSQL = strings.ReplaceAll(upperSQL, "\n", " ")
-			upperSQL = strings.ReplaceAll(upperSQL, "\r", " ")
-			upperSQL = strings.TrimSuffix(upperSQL, ";")
-			parts := strings.Fields(upperSQL)
+			sqlQuery = strings.TrimSpace(sqlQuery)
+			sqlQuery = strings.ReplaceAll(sqlQuery, "\t", " ")
+			sqlQuery = strings.ReplaceAll(sqlQuery, "\n", " ")
+			sqlQuery = strings.ReplaceAll(sqlQuery, "\r", " ")
+			sqlQuery = strings.TrimSuffix(sqlQuery, ";")
+			parts := strings.Fields(sqlQuery)
 			if len(parts) != 2 {
 				err = stream.Send(&sqlv1.QueryResponse{
 					Error: "UNDO command requires exactly one argument: UNDO <transactions count|time duration>",
@@ -235,7 +235,7 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				duration, err := time.ParseDuration(parts[1])
 				if err != nil {
 					err = stream.Send(&sqlv1.QueryResponse{
-						Error: "UNDO command requires a positive integer argument or a time duration: UNDO <transactions count|time duration>",
+						Error: fmt.Sprintf("UNDO command got %q but requires a positive integer argument or a time duration: UNDO <transactions count|time duration>", parts[1]),
 					})
 					if err != nil {
 						return err

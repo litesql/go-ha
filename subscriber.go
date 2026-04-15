@@ -259,12 +259,12 @@ func (s *NATSSubscriber) DeliveredInfo(ctx context.Context, name string) (any, e
 func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
+	max := s.streamSeq
 	var startSeq, total uint64
-	if s.streamSeq < transactionsCount {
+	if max < transactionsCount {
 		return fmt.Errorf("cannot undo %d transactions, only %d transactions available in stream", transactionsCount, s.streamSeq)
 	}
-	startSeq = (s.streamSeq - transactionsCount) + 1
+	startSeq = (max - transactionsCount) + 1
 	total = transactionsCount
 	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq, "total", total)
 	cons, err := s.js.CreateConsumer(ctx, s.stream, jetstream.ConsumerConfig{
@@ -318,7 +318,7 @@ func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) err
 		if err != nil {
 			slog.Error("failed to ack message for undo", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
 		}
-		if len(dedup) >= int(total) {
+		if len(dedup) >= int(total) || meta.Sequence.Stream >= max {
 			done <- struct{}{}
 			return
 		}

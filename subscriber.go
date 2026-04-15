@@ -312,7 +312,6 @@ func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) err
 			s.ack(msg, meta)
 			return
 		}
-		cs.Changes = reverseChanges(cs.Changes)
 		undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
 		err = msg.Ack()
 		if err != nil {
@@ -332,6 +331,7 @@ func (s *NATSSubscriber) Undo(ctx context.Context, transactionsCount uint64) err
 		return ctx.Err()
 	case <-done:
 		iter.Stop()
+		undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
 		return undoChangeSet.propagate(ctx, s.db)
 	}
 

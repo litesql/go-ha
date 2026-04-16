@@ -39,7 +39,7 @@ var (
 )
 
 type ConnHooksProvider interface {
-	RegisterHooks(driver.Conn) (driver.Conn, error)
+	RegisterHooks(driver.Conn, *Connector) (driver.Conn, error)
 	DisableHooks(*sql.Conn) error
 	EnableHooks(*sql.Conn) error
 }
@@ -607,7 +607,7 @@ func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.connHooksProvider.RegisterHooks(conn)
+	return c.connHooksProvider.RegisterHooks(conn, c)
 }
 
 type noHooksConnector struct {

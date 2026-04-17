@@ -228,6 +228,45 @@ func (p *AsyncNATSPublisher) relay() {
 	}
 }
 
+type DBPublisher struct {
+	db *sql.DB
+	mu sync.Mutex
+}
+
+func NewDBPublisher(db *sql.DB) (*DBPublisher, error) {
+	return &DBPublisher{db: db}, nil
+}
+
+func (p *DBPublisher) Publish(cs *ChangeSet) error {
+	data, err := json.Marshal(cs)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	_, err = p.db.Exec("INSERT INTO ha_changesets(changeset) VALUES(?)", data)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *DBPublisher) Sequence() uint64 {
+	var seq sql.NullInt64
+	err := p.db.QueryRow("SELECT MAX(seq) FROM ha_changesets").Scan(&seq)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("db publisher query last sequence", "error", err)
+		}
+		return 0
+	}
+	if !seq.Valid {
+		return 0
+	}
+	return uint64(seq.Int64)
+}
+
 type delayedStartPublisher struct {
 	pub Publisher
 }

@@ -197,6 +197,36 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
+	if c.publisher == nil && c.subscriber == nil {
+		historyDB := sql.OpenDB(&noHooksConnector{
+			driver: drv,
+			dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(c.replicationID, ".db")+"_history.db"),
+		})
+
+		_, err := historyDB.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS ha_changesets(seq INTEGER PRIMARY KEY, changeset JSONB);`)
+		if err != nil {
+			return nil, fmt.Errorf("create changesets table: %w", err)
+		}
+
+		dbPublisher, err := NewDBPublisher(historyDB)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start DB publisher: %w", err)
+		}
+		c.publisher = dbPublisher
+		c.closers = append(c.closers, historyDB)
+
+		c.subscriber, err = NewDBSubscriber(DBSubscriberConfig{
+			HistoryDB:    historyDB,
+			DB:           c.db,
+			ConnProvider: c.connHooksProvider,
+			Interceptor:  c.interceptor,
+			RowIdentify:  c.rowIdentify,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to start DB subscriber: %w", err)
+		}
+	}
+
 	c.connHooksProvider = connHooksFactory(ConnHooksConfig{
 		NodeName:       c.name,
 		ReplicationID:  c.replicationID,
@@ -311,6 +341,8 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			grpcServers[c.grpcPort].ReferenceCount++
 		}
 	}
+
+	slog.Debug("go-ha connector created", "dsn", dsn, "replication_id", c.replicationID, "node_name", c.name, "pub", fmt.Sprintf("%T", c.publisher), "sub", fmt.Sprintf("%T", c.subscriber), "snapshotter", fmt.Sprintf("%T", c.snapshotter))
 
 	connectors[dsn] = &c
 	return &c, nil

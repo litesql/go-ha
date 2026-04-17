@@ -20,15 +20,13 @@ import (
 
 type NoopSubscriber struct{}
 
-func (*NoopSubscriber) SetDB(db *sql.DB) {
+func (s *NoopSubscriber) SetDB(db *sql.DB) {}
 
-}
-
-func (*NoopSubscriber) Start() error {
+func (s *NoopSubscriber) Start() error {
 	return nil
 }
 
-func (*NoopSubscriber) LatestSeq() uint64 {
+func (s *NoopSubscriber) LatestSeq() uint64 {
 	return 0
 }
 
@@ -139,16 +137,9 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 		return nil, err
 	}
 
-	var strategy sqlStrategy
-	switch cfg.RowIdentify {
-	case PK:
-		strategy = pkIdentifyStrategy{}
-	case Rowid:
-		strategy = rowidIdentifyStrategy{}
-	case Full:
-		strategy = fullIdentifyStrategy{}
-	default:
-		return nil, fmt.Errorf("invalid row identify strategy: %v", cfg.RowIdentify)
+	strategy, err := getSqlStrategy(cfg.RowIdentify)
+	if err != nil {
+		return nil, err
 	}
 
 	s := NATSSubscriber{
@@ -547,6 +538,196 @@ func (s *NATSSubscriber) ack(msg jetstream.Msg, meta *jetstream.MsgMetadata) {
 	s.streamSeq = meta.Sequence.Stream
 }
 
+type DBSubscriber struct {
+	mu            sync.Mutex
+	historyDB     *sql.DB
+	db            *sql.DB
+	connProvider  ConnHooksProvider
+	interceptor   ChangeSetInterceptor
+	applyStrategy sqlStrategy
+
+	subject string
+}
+
+type DBSubscriberConfig struct {
+	HistoryDB    *sql.DB
+	DB           *sql.DB
+	ConnProvider ConnHooksProvider
+	Interceptor  ChangeSetInterceptor
+	RowIdentify  RowIdentify
+}
+
+func NewDBSubscriber(cfg DBSubscriberConfig) (*DBSubscriber, error) {
+	strategy, err := getSqlStrategy(cfg.RowIdentify)
+	if err != nil {
+		return nil, err
+	}
+	return &DBSubscriber{
+		historyDB:     cfg.HistoryDB,
+		db:            cfg.DB,
+		connProvider:  cfg.ConnProvider,
+		interceptor:   cfg.Interceptor,
+		applyStrategy: strategy,
+	}, nil
+}
+
+func (s *DBSubscriber) SetDB(db *sql.DB) {
+	s.db = db
+}
+
+func (s *DBSubscriber) Start() error {
+	return s.historyDB.QueryRow("SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&s.subject)
+}
+
+func (s *DBSubscriber) LatestSeq() uint64 {
+	var seq sql.NullInt64
+	err := s.historyDB.QueryRow("SELECT MAX(seq) FROM ha_changesets").Scan(&seq)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0
+		}
+		slog.Error("failed to get latest changeset sequence", "error", err)
+		return 0
+	}
+	if !seq.Valid {
+		return 0
+	}
+	return uint64(seq.Int64)
+}
+
+func (s *DBSubscriber) RemoveConsumer(ctx context.Context, name string) error {
+	return nil
+}
+
+func (s *DBSubscriber) DeliveredInfo(ctx context.Context, name string) (any, error) {
+	return nil, nil
+}
+
+func (s *DBSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error) {
+	if startSeq == 0 {
+		startSeq = s.LatestSeq()
+	}
+	rows, err := s.historyDB.Query("SELECT seq, changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]haconnect.HistoryItem, 0)
+	for rows.Next() {
+		var seq uint64
+		var data []byte
+		err = rows.Scan(&seq, &data)
+		if err != nil {
+			slog.Error("failed to scan changeset row", "error", err)
+			continue
+		}
+		var cs ChangeSet
+		err = json.Unmarshal(data, &cs)
+		if err != nil {
+			slog.Error("failed to unmarshal changeset data", "error", err, "seq", seq)
+			continue
+		}
+		cs.StreamSeq = seq
+		cs.SetStrategy(s.applyStrategy)
+		item := cs.toItem()
+		if len(item.SQL) > 0 {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error) {
+	rows, err := s.historyDB.Query("SELECT seq, changeset FROM ha_changesets WHERE changeset->'timestamp_ns' >= ? ORDER BY seq ASC", fmt.Sprint(time.Now().Add(-duration).UnixNano()))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]haconnect.HistoryItem, 0)
+	for rows.Next() {
+		var seq uint64
+		var data []byte
+		err = rows.Scan(&seq, &data)
+		if err != nil {
+			slog.Error("failed to scan changeset row", "error", err)
+			continue
+		}
+		var cs ChangeSet
+		err = json.Unmarshal(data, &cs)
+		if err != nil {
+			slog.Error("failed to unmarshal changeset data", "error", err, "seq", seq)
+			continue
+		}
+		cs.StreamSeq = seq
+		cs.SetStrategy(fullIdentifyStrategy{})
+		item := cs.toItem()
+		if len(item.SQL) > 0 {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	max := s.LatestSeq()
+	if startSeq == 0 {
+		startSeq = max
+	}
+	if startSeq == 0 || startSeq > max {
+		return fmt.Errorf("invalid transaction sequence %d, current stream sequence is %d", startSeq, max)
+	}
+	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq)
+	return s.undo(ctx, "SELECT changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
+}
+
+func (s *DBSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if duration <= 0 {
+		return fmt.Errorf("duration must be greater than 0")
+	}
+
+	startTime := time.Now().Add(-duration)
+	slog.Debug("starting undo by time", "subject", s.subject, "start_time", startTime)
+	return s.undo(ctx, "SELECT changeset FROM ha_changesets WHERE changeset->'timestamp_ns' >= ? ORDER BY seq ASC", fmt.Sprint(startTime.UnixNano()))
+}
+
+func (s *DBSubscriber) undo(ctx context.Context, query string, args ...any) error {
+	var undoChangeSet ChangeSet
+	undoChangeSet.ProcessID = processID
+	undoChangeSet.Subject = s.subject
+	undoChangeSet.SetStrategy(s.applyStrategy)
+	undoChangeSet.SetConnProvider(s.connProvider)
+	undoChangeSet.SetInterceptor(s.interceptor)
+	rows, err := s.historyDB.Query(query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var data []byte
+		err = rows.Scan(&data)
+		if err != nil {
+			slog.Error("failed to scan changeset row for undo by time", "error", err)
+			continue
+		}
+		var cs ChangeSet
+		err = json.Unmarshal(data, &cs)
+		if err != nil {
+			slog.Error("failed to unmarshal changeset data for undo by time", "error", err)
+			continue
+		}
+		undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
+	}
+	undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
+	slices.Reverse(undoChangeSet.Changes)
+	return undoChangeSet.propagate(ctx, s.db)
+}
+
 func reverseChanges(changes []Change) []Change {
 	reversed := make([]Change, 0)
 	for _, change := range changes {
@@ -555,4 +736,19 @@ func reverseChanges(changes []Change) []Change {
 		}
 	}
 	return reversed
+}
+
+func getSqlStrategy(rowIdentify RowIdentify) (sqlStrategy, error) {
+	var strategy sqlStrategy
+	switch rowIdentify {
+	case PK:
+		strategy = pkIdentifyStrategy{}
+	case Rowid:
+		strategy = rowidIdentifyStrategy{}
+	case Full:
+		strategy = fullIdentifyStrategy{}
+	default:
+		return nil, fmt.Errorf("invalid row identify strategy: %v", rowIdentify)
+	}
+	return strategy, nil
 }

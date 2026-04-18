@@ -252,7 +252,14 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		})
 		c.closers = append(c.closers, historyDB)
 
-		_, err = historyDB.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS ha_changesets(seq INTEGER PRIMARY KEY, changeset JSONB);`)
+		_, err = historyDB.Exec(`PRAGMA journal_mode=WAL; 
+			CREATE TABLE IF NOT EXISTS ha_changesets(
+				seq INTEGER PRIMARY KEY AUTOINCREMENT, 
+				changeset JSONB,
+				timestamp INTEGER GENERATED ALWAYS AS (jsonb_extract(changeset, '$.timestamp_ns')) VIRTUAL
+			);
+			CREATE INDEX IF NOT EXISTS idx_timestamp 
+				ON ha_changesets(timestamp);`)
 		if err != nil {
 			return nil, fmt.Errorf("create changesets table: %w", err)
 		}

@@ -298,15 +298,21 @@ func (p *DBPublisher) cleaner() {
 			}
 			p.mu.Lock()
 			slog.Debug("start cleaning local transactions history")
-			now := time.Now()
-			res, err := p.db.Exec(`DELETE FROM ha_changesets WHERE changeset->'timestamp_ns' < ?`, fmt.Sprint(time.Now().Add(-p.maxAge).UnixNano()))
-			if err != nil {
-				slog.Error("cleaning local transactions history", "error", err)
-				p.mu.Unlock()
-				continue
+			for {
+				now := time.Now()
+				res, err := p.db.Exec(`DELETE FROM ha_changesets WHERE seq IN (
+					SELECT seq FROM ha_changesets WHERE timestamp < ? LIMIT 1000
+				)`, fmt.Sprint(time.Now().Add(-p.maxAge).UnixNano()))
+				if err != nil {
+					slog.Error("cleaning local transactions history", "error", err)
+					break
+				}
+				rowsAffected, _ := res.RowsAffected()
+				slog.Debug("cleaning local transactions history", "count", rowsAffected, "duration", time.Since(now))
+				if rowsAffected < 1000 {
+					break
+				}
 			}
-			rowsAffected, _ := res.RowsAffected()
-			slog.Debug("cleaning local transactions history", "count", rowsAffected, "duration", time.Since(now))
 			p.mu.Unlock()
 		}
 	}

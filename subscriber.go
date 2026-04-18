@@ -641,7 +641,7 @@ func (s *DBSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]hac
 }
 
 func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error) {
-	rows, err := s.historyDB.Query("SELECT seq, changeset FROM ha_changesets WHERE changeset->'timestamp_ns' >= ? ORDER BY seq ASC", fmt.Sprint(time.Now().Add(-duration).UnixNano()))
+	rows, err := s.historyDB.Query("SELECT seq, changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(time.Now().Add(-duration).UnixNano()))
 	if err != nil {
 		return nil, err
 	}
@@ -691,7 +691,7 @@ func (s *DBSubscriber) UndoByTime(ctx context.Context, duration time.Duration) e
 
 	startTime := time.Now().Add(-duration)
 	slog.Debug("starting undo by time", "subject", s.subject, "start_time", startTime)
-	return s.undo(ctx, "SELECT changeset FROM ha_changesets WHERE changeset->'timestamp_ns' >= ? ORDER BY seq ASC", fmt.Sprint(startTime.UnixNano()))
+	return s.undo(ctx, "SELECT changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(startTime.UnixNano()))
 }
 
 func (s *DBSubscriber) undo(ctx context.Context, query string, args ...any) error {

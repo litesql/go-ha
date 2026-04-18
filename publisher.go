@@ -230,16 +230,15 @@ func (p *AsyncNATSPublisher) relay() {
 
 type DBPublisher struct {
 	db     *sql.DB
-	mu     *sync.Mutex
+	mu     sync.Mutex
 	maxAge time.Duration
 	once   sync.Once
 	quit   chan struct{}
 }
 
-func NewDBPublisher(db *sql.DB, mu *sync.Mutex, maxAge time.Duration) (*DBPublisher, error) {
+func NewDBPublisher(db *sql.DB, maxAge time.Duration) (*DBPublisher, error) {
 	p := &DBPublisher{
 		db:     db,
-		mu:     mu,
 		maxAge: maxAge,
 		quit:   make(chan struct{}),
 	}

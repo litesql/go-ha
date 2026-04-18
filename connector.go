@@ -203,8 +203,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		localDBSub *DBSubscriber
 	)
 	if c.localHistoryMaxAge > 0 && c.publisher == nil && c.subscriber == nil {
-		var mu sync.Mutex
-		localDBPub, err = NewDBPublisher(nil, &mu, c.localHistoryMaxAge)
+		localDBPub, err = NewDBPublisher(nil, c.localHistoryMaxAge)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start DB publisher: %w", err)
 		}
@@ -213,7 +212,6 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		c.publisher = localDBPub
 
 		localDBSub, err = NewDBSubscriber(DBSubscriberConfig{
-			Mutex:        &mu,
 			ConnProvider: c.connHooksProvider,
 			Interceptor:  c.interceptor,
 			RowIdentify:  c.rowIdentify,

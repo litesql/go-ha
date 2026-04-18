@@ -539,7 +539,6 @@ func (s *NATSSubscriber) ack(msg jetstream.Msg, meta *jetstream.MsgMetadata) {
 }
 
 type DBSubscriber struct {
-	mu            *sync.Mutex
 	historyDB     *sql.DB
 	db            *sql.DB
 	connProvider  ConnHooksProvider
@@ -550,7 +549,6 @@ type DBSubscriber struct {
 }
 
 type DBSubscriberConfig struct {
-	Mutex        *sync.Mutex
 	HistoryDB    *sql.DB
 	DB           *sql.DB
 	ConnProvider ConnHooksProvider
@@ -564,7 +562,6 @@ func NewDBSubscriber(cfg DBSubscriberConfig) (*DBSubscriber, error) {
 		return nil, err
 	}
 	return &DBSubscriber{
-		mu:            cfg.Mutex,
 		historyDB:     cfg.HistoryDB,
 		db:            cfg.DB,
 		connProvider:  cfg.ConnProvider,
@@ -676,8 +673,6 @@ func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration
 }
 
 func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	max := s.LatestSeq()
 	if startSeq == 0 {
 		startSeq = max
@@ -690,8 +685,6 @@ func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
 }
 
 func (s *DBSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if duration <= 0 {
 		return fmt.Errorf("duration must be greater than 0")
 	}

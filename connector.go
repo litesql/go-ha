@@ -349,7 +349,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			}
 			slog.Info("HA gRPC/connect server listening", "addr", lis.Addr())
 			go func() {
-				if err := s.Serve(lis); err != nil {
+				if err := s.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					log.Fatalf("failed to serve grpc: %v", err)
 				}
 			}()

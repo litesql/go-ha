@@ -229,12 +229,22 @@ func (p *AsyncNATSPublisher) relay() {
 }
 
 type DBPublisher struct {
-	db *sql.DB
-	mu sync.Mutex
+	db     *sql.DB
+	mu     *sync.Mutex
+	maxAge time.Duration
+	once   sync.Once
+	quit   chan struct{}
 }
 
-func NewDBPublisher(db *sql.DB) (*DBPublisher, error) {
-	return &DBPublisher{db: db}, nil
+func NewDBPublisher(db *sql.DB, mu *sync.Mutex, maxAge time.Duration) (*DBPublisher, error) {
+	p := &DBPublisher{
+		db:     db,
+		mu:     mu,
+		maxAge: maxAge,
+		quit:   make(chan struct{}),
+	}
+	go p.cleaner()
+	return p, nil
 }
 
 func (p *DBPublisher) Publish(cs *ChangeSet) error {
@@ -253,6 +263,9 @@ func (p *DBPublisher) Publish(cs *ChangeSet) error {
 }
 
 func (p *DBPublisher) Sequence() uint64 {
+	if p.db == nil {
+		return 0
+	}
 	var seq sql.NullInt64
 	err := p.db.QueryRow("SELECT MAX(seq) FROM ha_changesets").Scan(&seq)
 	if err != nil {
@@ -265,6 +278,39 @@ func (p *DBPublisher) Sequence() uint64 {
 		return 0
 	}
 	return uint64(seq.Int64)
+}
+
+func (p *DBPublisher) Close() error {
+	close(p.quit)
+	return nil
+}
+
+func (p *DBPublisher) cleaner() {
+	if p.maxAge <= 0 {
+		return
+	}
+	for {
+		select {
+		case <-p.quit:
+			return
+		case <-time.After(p.maxAge / 2):
+			if p.db == nil {
+				continue
+			}
+			p.mu.Lock()
+			slog.Debug("start cleaning local transactions history")
+			now := time.Now()
+			res, err := p.db.Exec(`DELETE FROM ha_changesets WHERE changeset->'timestamp_ns' < ?`, fmt.Sprint(time.Now().Add(-p.maxAge).UnixNano()))
+			if err != nil {
+				slog.Error("cleaning local transactions history", "error", err)
+				p.mu.Unlock()
+				continue
+			}
+			rowsAffected, _ := res.RowsAffected()
+			slog.Debug("cleaning local transactions history", "count", rowsAffected, "duration", time.Since(now))
+			p.mu.Unlock()
+		}
+	}
 }
 
 type delayedStartPublisher struct {

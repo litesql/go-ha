@@ -221,6 +221,12 @@ func WithQueryRouter(re *regexp.Regexp) Option {
 	}
 }
 
+func WithLocalHistoryMaxAge(maxAge time.Duration) Option {
+	return func(c *Connector) {
+		c.localHistoryMaxAge = maxAge
+	}
+}
+
 func NameToOptions(name string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
@@ -407,6 +413,12 @@ func NameToOptions(name string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid queryRouter: %w", err)
 			}
 			opts = append(opts, WithQueryRouter(re))
+		case "localHistoryMaxAge":
+			maxAge, err := time.ParseDuration(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid localHistoryMaxAge: %w", err)
+			}
+			opts = append(opts, WithLocalHistoryMaxAge(maxAge))
 		case "autoStart":
 			autoStart, err := strconv.ParseBool(value)
 			if err != nil {

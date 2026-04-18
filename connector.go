@@ -75,17 +75,18 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	defer muConnectors.Unlock()
 
 	c := Connector{
-		clusterSize:       1,
-		dsn:               dsn,
-		driver:            drv,
-		backupFn:          backupFn,
-		rowIdentify:       PK,
-		replicationStream: DefaultStream,
-		publisherTimeout:  15 * time.Second,
-		grpcTimeout:       5 * time.Second,
-		replicas:          1,
-		leaderProvider:    &StaticLeader{},
-		autoStart:         true,
+		clusterSize:        1,
+		dsn:                dsn,
+		driver:             drv,
+		backupFn:           backupFn,
+		rowIdentify:        PK,
+		replicationStream:  DefaultStream,
+		publisherTimeout:   15 * time.Second,
+		grpcTimeout:        5 * time.Second,
+		replicas:           1,
+		localHistoryMaxAge: 24 * time.Hour,
+		leaderProvider:     &StaticLeader{},
+		autoStart:          true,
 		natsOptions: []nats.Option{
 			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 				if err != nil {
@@ -197,27 +198,22 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
-	if c.publisher == nil && c.subscriber == nil {
-		historyDB := sql.OpenDB(&noHooksConnector{
-			driver: drv,
-			dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(c.replicationID, ".db")+"_history.db"),
-		})
-
-		_, err := historyDB.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS ha_changesets(seq INTEGER PRIMARY KEY, changeset JSONB);`)
-		if err != nil {
-			return nil, fmt.Errorf("create changesets table: %w", err)
-		}
-
-		dbPublisher, err := NewDBPublisher(historyDB)
+	var (
+		localDBPub *DBPublisher
+		localDBSub *DBSubscriber
+	)
+	if c.localHistoryMaxAge > 0 && c.publisher == nil && c.subscriber == nil {
+		var mu sync.Mutex
+		localDBPub, err = NewDBPublisher(nil, &mu, c.localHistoryMaxAge)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start DB publisher: %w", err)
 		}
-		c.publisher = dbPublisher
-		c.closers = append(c.closers, historyDB)
+		c.closers = append(c.closers, localDBPub)
 
-		c.subscriber, err = NewDBSubscriber(DBSubscriberConfig{
-			HistoryDB:    historyDB,
-			DB:           c.db,
+		c.publisher = localDBPub
+
+		localDBSub, err = NewDBSubscriber(DBSubscriberConfig{
+			Mutex:        &mu,
 			ConnProvider: c.connHooksProvider,
 			Interceptor:  c.interceptor,
 			RowIdentify:  c.rowIdentify,
@@ -225,6 +221,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		if err != nil {
 			return nil, fmt.Errorf("failed to start DB subscriber: %w", err)
 		}
+		c.subscriber = localDBSub
 	}
 
 	c.connHooksProvider = connHooksFactory(ConnHooksConfig{
@@ -244,6 +241,28 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	})
 	c.db = sql.OpenDB(&c)
 	c.closers = append(c.closers, c.db)
+	if localDBPub != nil && localDBSub != nil {
+		var filename string
+		err := c.db.QueryRow("SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&filename)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get database filename: %w", err)
+		}
+
+		historyDB := sql.OpenDB(&noHooksConnector{
+			driver: drv,
+			dsn:    "file:" + filepath.Join(filepath.Dir(filename), strings.TrimSuffix(c.replicationID, ".db")+"_history.db"),
+		})
+		c.closers = append(c.closers, historyDB)
+
+		_, err = historyDB.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS ha_changesets(seq INTEGER PRIMARY KEY, changeset JSONB);`)
+		if err != nil {
+			return nil, fmt.Errorf("create changesets table: %w", err)
+		}
+		localDBPub.db = historyDB
+		localDBSub.historyDB = historyDB
+		localDBSub.db = c.db
+	}
+
 	if natsConn != nil {
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.replicationID, c.name))
@@ -393,6 +412,8 @@ type Connector struct {
 	snapshotter DBSnapshotter
 
 	cdcPublisher CDCPublisher
+
+	localHistoryMaxAge time.Duration
 
 	leaderElectionLocalTarget string
 	leaderProvider            LeaderProvider

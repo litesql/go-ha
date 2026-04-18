@@ -539,7 +539,7 @@ func (s *NATSSubscriber) ack(msg jetstream.Msg, meta *jetstream.MsgMetadata) {
 }
 
 type DBSubscriber struct {
-	mu            sync.Mutex
+	mu            *sync.Mutex
 	historyDB     *sql.DB
 	db            *sql.DB
 	connProvider  ConnHooksProvider
@@ -550,6 +550,7 @@ type DBSubscriber struct {
 }
 
 type DBSubscriberConfig struct {
+	Mutex        *sync.Mutex
 	HistoryDB    *sql.DB
 	DB           *sql.DB
 	ConnProvider ConnHooksProvider
@@ -563,6 +564,7 @@ func NewDBSubscriber(cfg DBSubscriberConfig) (*DBSubscriber, error) {
 		return nil, err
 	}
 	return &DBSubscriber{
+		mu:            cfg.Mutex,
 		historyDB:     cfg.HistoryDB,
 		db:            cfg.DB,
 		connProvider:  cfg.ConnProvider,
@@ -580,6 +582,9 @@ func (s *DBSubscriber) Start() error {
 }
 
 func (s *DBSubscriber) LatestSeq() uint64 {
+	if s.historyDB == nil {
+		return 0
+	}
 	var seq sql.NullInt64
 	err := s.historyDB.QueryRow("SELECT MAX(seq) FROM ha_changesets").Scan(&seq)
 	if err != nil {

@@ -36,6 +36,7 @@ Go database/sql base driver providing high availability for SQLite databases.
 | grpcTimeout          | Timeout for the gRPC operations                                 | 5s   |
 | grpcToken            | Token to protect gRPC server |     |   
 | leaderProvider       | Defines the strategy for determining a leader node in the cluster. This is useful for redirecting HTTP requests. Examples include `dynamic:http://host:port` or `static:http://host:port`.   |       |
+| localHistoryMaxAge   | Max age of the local db transactions history used in undo operations. Set to zero to disable local _history.db | 24h |
 | name                 | Name of the node in the cluster.                                                   |                 |
 | natsConfigFile       | Path to the configuration file for the embedded NATS server. Overrides others NATS configurations.           |                 |
 | natsName             | Sets the name of the embedded NATS server.                                                     |                 |

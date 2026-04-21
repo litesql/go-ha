@@ -75,18 +75,17 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	defer muConnectors.Unlock()
 
 	c := Connector{
-		clusterSize:        1,
-		dsn:                dsn,
-		driver:             drv,
-		backupFn:           backupFn,
-		rowIdentify:        PK,
-		replicationStream:  DefaultStream,
-		publisherTimeout:   15 * time.Second,
-		grpcTimeout:        5 * time.Second,
-		replicas:           1,
-		localHistoryMaxAge: 24 * time.Hour,
-		leaderProvider:     &StaticLeader{},
-		autoStart:          true,
+		clusterSize:       1,
+		dsn:               dsn,
+		driver:            drv,
+		backupFn:          backupFn,
+		rowIdentify:       PK,
+		replicationStream: DefaultStream,
+		publisherTimeout:  15 * time.Second,
+		grpcTimeout:       5 * time.Second,
+		replicas:          1,
+		leaderProvider:    &StaticLeader{},
+		autoStart:         true,
 		natsOptions: []nats.Option{
 			nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 				if err != nil {

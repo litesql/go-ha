@@ -20,6 +20,10 @@ import (
 
 type NoopSubscriber struct{}
 
+func (s *NoopSubscriber) DB() *sql.DB {
+	return nil
+}
+
 func (s *NoopSubscriber) SetDB(db *sql.DB) {}
 
 func (s *NoopSubscriber) Start() error {
@@ -176,6 +180,10 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 
 	s.consumer = consumer
 	return &s, nil
+}
+
+func (s *NATSSubscriber) DB() *sql.DB {
+	return s.db
 }
 
 func (s *NATSSubscriber) SetDB(db *sql.DB) {
@@ -568,6 +576,10 @@ func NewDBSubscriber(cfg DBSubscriberConfig) (*DBSubscriber, error) {
 		interceptor:   cfg.Interceptor,
 		applyStrategy: strategy,
 	}, nil
+}
+
+func (s *DBSubscriber) DB() *sql.DB {
+	return s.db
 }
 
 func (s *DBSubscriber) SetDB(db *sql.DB) {

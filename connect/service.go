@@ -383,9 +383,25 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 
 			params := req.GetParams()
 			args := make([]any, len(params))
-			for i, param := range params {
-				if param.Name != "" {
-					args[i] = sql.Named(param.Name, FromAnypb(param.Value))
+			if len(params) > 0 {
+				if params[0].Name != "" {
+					for i, param := range params {
+						args[i] = sql.Named(param.Name, FromAnypb(param.Value))
+					}
+				} else {
+					max := int64(len(params))
+					for _, param := range params {
+						if param.Ordinal < 1 || param.Ordinal > max {
+							err = stream.Send(&sqlv1.QueryResponse{
+								Error: fmt.Sprintf("Invalid param: index(%d) max(%d)", param.Ordinal, max),
+							})
+							if err != nil {
+								return err
+							}
+							continue
+						}
+						args[param.Ordinal-1] = FromAnypb(param.Value)
+					}
 				}
 			}
 

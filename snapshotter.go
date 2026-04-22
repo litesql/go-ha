@@ -24,6 +24,10 @@ type NoopSnapshotter struct {
 	seq uint64
 }
 
+func (s *NoopSnapshotter) DB() *sql.DB {
+	return nil
+}
+
 func (s *NoopSnapshotter) SetDB(_ *sql.DB) {}
 
 func (s *NoopSnapshotter) Start() {}
@@ -86,6 +90,10 @@ func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream
 	}
 	s.latestSnapshotSeq, _ = s.LatestSnapshotSequence(ctx)
 	return s, nil
+}
+
+func (s *NATSSnapshotter) DB() *sql.DB {
+	return s.db
 }
 
 func (s *NATSSnapshotter) SetDB(db *sql.DB) {

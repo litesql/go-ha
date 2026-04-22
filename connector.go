@@ -236,11 +236,12 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		GrpcInsecure: c.grpcInsecure,
 		QueryRouter:  c.queryRouter,
 	})
-	c.db = sql.OpenDB(&c)
-	c.closers = append(c.closers, c.db)
+
 	if localDBPub != nil && localDBSub != nil {
+		tempDB := sql.OpenDB(&c)
+		defer tempDB.Close()
 		var filename string
-		err := c.db.QueryRow("SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&filename)
+		err := tempDB.QueryRow("SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&filename)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get database filename: %w", err)
 		}
@@ -264,9 +265,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 		localDBPub.db = historyDB
 		localDBSub.historyDB = historyDB
-		localDBSub.db = c.db
 	}
-
 	if natsConn != nil {
 		if c.subscriber == nil {
 			durable := normalizeNatsIdentifier(fmt.Sprintf("%s_%s", c.replicationID, c.name))
@@ -277,7 +276,6 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 				Stream:       c.replicationStream,
 				Subject:      subject,
 				Policy:       c.deliverPolicy,
-				DB:           c.db,
 				ConnProvider: c.connHooksProvider,
 				Interceptor:  c.interceptor,
 				RowIdentify:  c.rowIdentify,
@@ -301,11 +299,19 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	}
 	if c.autoStart {
 		if c.waitFor == nil {
+			c.db = sql.OpenDB(&c)
+			c.closers = append(c.closers, c.db)
+			if c.subscriber.DB() == nil {
+				c.subscriber.SetDB(c.db)
+			}
 			err = c.subscriber.Start()
 			if err != nil {
 				return nil, fmt.Errorf("failed to start subscriber: %w", err)
 			}
 			if c.snapshotter != nil {
+				if c.snapshotter.DB() == nil {
+					c.snapshotter.SetDB(c.db)
+				}
 				c.snapshotter.Start()
 			}
 		} else {
@@ -314,6 +320,11 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			}
 			go func() {
 				<-c.waitFor
+				c.db = sql.OpenDB(&c)
+				c.closers = append(c.closers, c.db)
+				if c.subscriber.DB() == nil {
+					c.subscriber.SetDB(c.db)
+				}
 				if delayedStartPub, ok := c.publisher.(*delayedStartPublisher); ok {
 					c.publisher = delayedStartPub.pub
 				}
@@ -322,9 +333,22 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 					slog.Error("failed to start subscriber", "error", err)
 				}
 				if c.snapshotter != nil {
+					if c.snapshotter.DB() == nil {
+						c.snapshotter.SetDB(c.db)
+					}
 					c.snapshotter.Start()
 				}
 			}()
+		}
+	} else {
+		c.db = sql.OpenDB(&c)
+		c.closers = append(c.closers, c.db)
+
+		if c.subscriber.DB() == nil {
+			c.subscriber.SetDB(c.db)
+		}
+		if c.snapshotter != nil && c.snapshotter.DB() == nil {
+			c.snapshotter.SetDB(c.db)
 		}
 	}
 
@@ -765,6 +789,7 @@ type CDCPublisher interface {
 
 type Subscriber interface {
 	TxSeqTracker
+	DB() *sql.DB
 	SetDB(*sql.DB)
 	Start() error
 	RemoveConsumer(ctx context.Context, name string) error
@@ -781,6 +806,7 @@ type ChangeSetInterceptor interface {
 }
 
 type DBSnapshotter interface {
+	DB() *sql.DB
 	SetDB(*sql.DB)
 	Start()
 	TakeSnapshot(ctx context.Context) (sequence uint64, err error)

@@ -201,8 +201,8 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		localDBPub *DBPublisher
 		localDBSub *DBSubscriber
 	)
-	if c.localHistoryMaxAge > 0 && c.publisher == nil && c.subscriber == nil {
-		localDBPub, err = NewDBPublisher(nil, c.localHistoryMaxAge)
+	if c.streamMaxAge > 0 && c.publisher == nil && c.subscriber == nil {
+		localDBPub, err = NewDBPublisher(nil, c.streamMaxAge)
 		if err != nil {
 			return nil, fmt.Errorf("failed to start DB publisher: %w", err)
 		}
@@ -441,8 +441,6 @@ type Connector struct {
 
 	cdcPublisher CDCPublisher
 
-	localHistoryMaxAge time.Duration
-
 	leaderElectionLocalTarget string
 	leaderProvider            LeaderProvider
 
@@ -630,8 +628,8 @@ func (c *Connector) HistoryByTime(ctx context.Context, duration time.Duration) (
 	return c.subscriber.HistoryByTime(ctx, duration)
 }
 
-func (c *Connector) UndoBySeq(ctx context.Context, startSeq uint64) error {
-	return c.subscriber.UndoBySeq(ctx, startSeq)
+func (c *Connector) UndoBySeq(ctx context.Context, startSeq uint64, filterEntity haconnect.UndoFilter) error {
+	return c.subscriber.UndoBySeq(ctx, startSeq, filterEntity)
 }
 
 func (c *Connector) UndoByTime(ctx context.Context, duration time.Duration) error {
@@ -796,7 +794,7 @@ type Subscriber interface {
 	DeliveredInfo(ctx context.Context, name string) (any, error)
 	HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error)
 	HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error)
-	UndoBySeq(ctx context.Context, startSeq uint64) error
+	UndoBySeq(ctx context.Context, startSeq uint64, filterType haconnect.UndoFilter) error
 	UndoByTime(ctx context.Context, duration time.Duration) error
 }
 

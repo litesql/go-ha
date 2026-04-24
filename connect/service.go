@@ -31,6 +31,14 @@ type HistoryItem struct {
 	Timestamp int64    `json:"timestamp_ns"`
 }
 
+type UndoFilter int
+
+const (
+	UndoFilterNone UndoFilter = iota
+	UndoFilterEntity
+	UndoFilterTransaction
+)
+
 func historyToData(items []HistoryItem) *sqlv1.Data {
 	var data sqlv1.Data
 	data.Columns = []string{"seq", "sql", "timestamp"}
@@ -61,7 +69,7 @@ type HADB interface {
 	Backup(context.Context, io.Writer) error
 	HistoryBySeq(context.Context, uint64) ([]HistoryItem, error)
 	HistoryByTime(context.Context, time.Duration) ([]HistoryItem, error)
-	UndoBySeq(context.Context, uint64) error
+	UndoBySeq(context.Context, uint64, UndoFilter) error
 	UndoByTime(context.Context, time.Duration) error
 }
 
@@ -327,10 +335,28 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				}
 				continue
 			}
+			var filter UndoFilter
+			switch {
+			case strings.HasPrefix(upperSQL, "UNDOT"):
+				filter = UndoFilterTransaction
+			case strings.HasPrefix(upperSQL, "UNDOE"):
+				filter = UndoFilterEntity
+			default:
+				filter = UndoFilterNone
+			}
 			var seq uint64
 			if len(parts) == 2 {
 				seq, err = strconv.ParseUint(parts[1], 10, 64)
 				if err != nil {
+					if filter != UndoFilterNone {
+						err = stream.Send(&sqlv1.QueryResponse{
+							Error: fmt.Sprintf("%s command got %q but requires a positive integer argument: %s <stream sequence>", parts[0], parts[1], parts[0]),
+						})
+						if err != nil {
+							return err
+						}
+						continue
+					}
 					duration, err := time.ParseDuration(parts[1])
 					if err != nil {
 						err = stream.Send(&sqlv1.QueryResponse{
@@ -358,7 +384,8 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 					continue
 				}
 			}
-			err = hadb.UndoBySeq(ctx, seq)
+
+			err = hadb.UndoBySeq(ctx, seq, filter)
 			if err != nil {
 				err = stream.Send(&sqlv1.QueryResponse{
 					Error: fmt.Sprintf("failed to undo transactions from stream sequence %d: %v", seq, err),

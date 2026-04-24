@@ -50,7 +50,7 @@ func (*NoopSubscriber) HistoryByTime(ctx context.Context, duration time.Duration
 	return nil, nil
 }
 
-func (*NoopSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
+func (*NoopSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter) error {
 	return nil
 }
 
@@ -307,7 +307,7 @@ func (s *NATSSubscriber) HistoryByTime(ctx context.Context, duration time.Durati
 	}, max)
 }
 
-func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
+func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	max := s.streamSeq
@@ -325,7 +325,7 @@ func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
 		OptStartSeq:       startSeq,
 		MaxAckPending:     1,
 		InactiveThreshold: 2 * time.Second,
-	}, max)
+	}, max, filter)
 }
 
 func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
@@ -343,7 +343,7 @@ func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration)
 		DeliverPolicy: jetstream.DeliverByStartTimePolicy,
 		OptStartTime:  &startTime,
 		MaxAckPending: 1,
-	}, max)
+	}, max, haconnect.UndoFilterNone)
 }
 
 func (s *NATSSubscriber) history(ctx context.Context, cc jetstream.ConsumerConfig, max uint64) ([]haconnect.HistoryItem, error) {
@@ -414,7 +414,7 @@ func (s *NATSSubscriber) history(ctx context.Context, cc jetstream.ConsumerConfi
 	}
 }
 
-func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, max uint64) error {
+func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, max uint64, filter haconnect.UndoFilter) error {
 	cons, err := s.js.CreateConsumer(ctx, s.stream, cc)
 	if err != nil {
 		return err
@@ -431,6 +431,8 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 	dedup := make(map[uint64]struct{})
 	done := make(chan struct{}, 1)
 	var hasData bool
+	var tableIds map[string][]int64
+	first := true
 	iter, err := cons.Consume(func(msg jetstream.Msg) {
 		hasData = true
 		meta, err := msg.Metadata()
@@ -450,10 +452,45 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 		err = json.Unmarshal(msg.Data(), &cs)
 		if err != nil {
 			slog.Error("failed to unmarshal replication message", "error", err, "stream_seq", cs.StreamSeq)
-			s.ack(msg, meta)
+			if err := msg.Ack(); err != nil {
+				slog.Error("failed to ack message for undo", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
+			}
 			return
 		}
-		undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
+		if first && filter != haconnect.UndoFilterNone {
+			first = false
+			tableIds = make(map[string][]int64)
+			for _, change := range cs.Changes {
+				switch change.Operation {
+				case "INSERT":
+					tableIds[change.Table] = append(tableIds[change.Table], change.NewRowID)
+				case "DELETE":
+					tableIds[change.Table] = append(tableIds[change.Table], change.OldRowID)
+				case "UPDATE":
+					tableIds[change.Table] = append(tableIds[change.Table], change.OldRowID, change.NewRowID)
+				}
+			}
+			slog.Debug("filtering undo changes by affected tables and rowids", "subject", s.subject, "table_ids", tableIds)
+		}
+		affected := true
+		if filter == haconnect.UndoFilterTransaction {
+			affected = false
+			for _, change := range cs.Changes {
+				for _, rowid := range tableIds[change.Table] {
+					if change.OldRowID == rowid || change.NewRowID == rowid {
+						affected = true
+						break
+					}
+				}
+				if affected {
+					break
+				}
+			}
+		}
+
+		if affected {
+			undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
+		}
 		err = msg.Ack()
 		if err != nil {
 			slog.Error("failed to ack message for undo", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
@@ -475,6 +512,9 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 			return ctx.Err()
 		case <-done:
 			iter.Stop()
+			if filter == haconnect.UndoFilterEntity {
+				undoChangeSet.Changes = filterEntityChanges(undoChangeSet.Changes, tableIds)
+			}
 			undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
 			slices.Reverse(undoChangeSet.Changes)
 			return undoChangeSet.propagate(ctx, s.db)
@@ -684,7 +724,7 @@ func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration
 	return items, nil
 }
 
-func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
+func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter) error {
 	max := s.LatestSeq()
 	if startSeq == 0 {
 		startSeq = max
@@ -693,7 +733,7 @@ func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64) error {
 		return fmt.Errorf("invalid transaction sequence %d, current stream sequence is %d", startSeq, max)
 	}
 	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq)
-	return s.undo(ctx, "SELECT changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
+	return s.undo(ctx, filter, "SELECT changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
 }
 
 func (s *DBSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
@@ -703,10 +743,10 @@ func (s *DBSubscriber) UndoByTime(ctx context.Context, duration time.Duration) e
 
 	startTime := time.Now().Add(-duration)
 	slog.Debug("starting undo by time", "subject", s.subject, "start_time", startTime)
-	return s.undo(ctx, "SELECT changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(startTime.UnixNano()))
+	return s.undo(ctx, haconnect.UndoFilterNone, "SELECT changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(startTime.UnixNano()))
 }
 
-func (s *DBSubscriber) undo(ctx context.Context, query string, args ...any) error {
+func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, query string, args ...any) error {
 	var undoChangeSet ChangeSet
 	undoChangeSet.ProcessID = processID
 	undoChangeSet.Subject = s.subject
@@ -718,24 +758,75 @@ func (s *DBSubscriber) undo(ctx context.Context, query string, args ...any) erro
 		return err
 	}
 	defer rows.Close()
+	var tableIds map[string][]int64
+	first := true
 	for rows.Next() {
 		var data []byte
 		err = rows.Scan(&data)
 		if err != nil {
-			slog.Error("failed to scan changeset row for undo by time", "error", err)
-			continue
+			return fmt.Errorf("failed to scan changeset row for undo: %w", err)
 		}
 		var cs ChangeSet
 		err = json.Unmarshal(data, &cs)
 		if err != nil {
-			slog.Error("failed to unmarshal changeset data for undo by time", "error", err)
-			continue
+			return fmt.Errorf("failed to unmarshal changeset data for undo: %w", err)
+		}
+		if first && filter != haconnect.UndoFilterNone {
+			first = false
+			tableIds = make(map[string][]int64)
+			for _, change := range cs.Changes {
+				switch change.Operation {
+				case "INSERT":
+					tableIds[change.Table] = append(tableIds[change.Table], change.NewRowID)
+				case "DELETE":
+					tableIds[change.Table] = append(tableIds[change.Table], change.OldRowID)
+				case "UPDATE":
+					tableIds[change.Table] = append(tableIds[change.Table], change.OldRowID, change.NewRowID)
+				}
+			}
+			slog.Debug("filtering undo changes by affected tables and rowids", "subject", s.subject, "table_ids", tableIds, "undo_filter", filter)
+		}
+		if filter == haconnect.UndoFilterTransaction {
+			affected := false
+			for _, change := range cs.Changes {
+				for _, rowid := range tableIds[change.Table] {
+					if change.OldRowID == rowid || change.NewRowID == rowid {
+						affected = true
+						break
+					}
+				}
+				if affected {
+					break
+				}
+			}
+			if !affected {
+				continue
+			}
 		}
 		undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
+	}
+	if filter == haconnect.UndoFilterEntity {
+		undoChangeSet.Changes = filterEntityChanges(undoChangeSet.Changes, tableIds)
 	}
 	undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
 	slices.Reverse(undoChangeSet.Changes)
 	return undoChangeSet.propagate(ctx, s.db)
+}
+
+func filterEntityChanges(changes []Change, tableIds map[string][]int64) []Change {
+	if len(tableIds) == 0 {
+		return []Change{}
+	}
+	var filtered []Change
+	for _, change := range changes {
+		for _, rowid := range tableIds[change.Table] {
+			if change.OldRowID == rowid || change.NewRowID == rowid {
+				filtered = append(filtered, change)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 func reverseChanges(changes []Change) []Change {

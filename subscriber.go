@@ -50,11 +50,11 @@ func (*NoopSubscriber) HistoryByTime(ctx context.Context, duration time.Duration
 	return nil, nil
 }
 
-func (*NoopSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter) error {
+func (*NoopSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter, filterEntities map[string][]int64) error {
 	return nil
 }
 
-func (*NoopSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
+func (*NoopSubscriber) UndoByTime(ctx context.Context, duration time.Duration, filter haconnect.UndoFilter, filterEntities map[string][]int64) error {
 	return nil
 }
 
@@ -307,7 +307,7 @@ func (s *NATSSubscriber) HistoryByTime(ctx context.Context, duration time.Durati
 	}, max)
 }
 
-func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter) error {
+func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	max := s.streamSeq
@@ -325,10 +325,10 @@ func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter 
 		OptStartSeq:       startSeq,
 		MaxAckPending:     1,
 		InactiveThreshold: 2 * time.Second,
-	}, max, filter)
+	}, max, filterType, filterEntities)
 }
 
-func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
+func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error {
 	startTime := time.Now().Add(-duration)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -343,7 +343,7 @@ func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration)
 		DeliverPolicy: jetstream.DeliverByStartTimePolicy,
 		OptStartTime:  &startTime,
 		MaxAckPending: 1,
-	}, max, haconnect.UndoFilterNone)
+	}, max, filterType, filterEntities)
 }
 
 func (s *NATSSubscriber) history(ctx context.Context, cc jetstream.ConsumerConfig, max uint64) ([]haconnect.HistoryItem, error) {
@@ -414,7 +414,7 @@ func (s *NATSSubscriber) history(ctx context.Context, cc jetstream.ConsumerConfi
 	}
 }
 
-func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, max uint64, filter haconnect.UndoFilter) error {
+func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, max uint64, filter haconnect.UndoFilter, tableIds map[string][]int64) error {
 	cons, err := s.js.CreateConsumer(ctx, s.stream, cc)
 	if err != nil {
 		return err
@@ -431,7 +431,6 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 	dedup := make(map[uint64]struct{})
 	done := make(chan struct{}, 1)
 	var hasData bool
-	var tableIds map[string][]int64
 	first := true
 	iter, err := cons.Consume(func(msg jetstream.Msg) {
 		hasData = true
@@ -457,7 +456,7 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 			}
 			return
 		}
-		if first && filter != haconnect.UndoFilterNone {
+		if first && len(tableIds) == 0 && filter != haconnect.UndoFilterNone {
 			first = false
 			tableIds = make(map[string][]int64)
 			for _, change := range cs.Changes {
@@ -724,7 +723,7 @@ func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration
 	return items, nil
 }
 
-func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter) error {
+func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter, filterEntities map[string][]int64) error {
 	max := s.LatestSeq()
 	if startSeq == 0 {
 		startSeq = max
@@ -733,20 +732,20 @@ func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter ha
 		return fmt.Errorf("invalid transaction sequence %d, current stream sequence is %d", startSeq, max)
 	}
 	slog.Debug("starting undo", "subject", s.subject, "start_seq", startSeq)
-	return s.undo(ctx, filter, "SELECT changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
+	return s.undo(ctx, filter, filterEntities, "SELECT changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
 }
 
-func (s *DBSubscriber) UndoByTime(ctx context.Context, duration time.Duration) error {
+func (s *DBSubscriber) UndoByTime(ctx context.Context, duration time.Duration, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error {
 	if duration <= 0 {
 		return fmt.Errorf("duration must be greater than 0")
 	}
 
 	startTime := time.Now().Add(-duration)
 	slog.Debug("starting undo by time", "subject", s.subject, "start_time", startTime)
-	return s.undo(ctx, haconnect.UndoFilterNone, "SELECT changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(startTime.UnixNano()))
+	return s.undo(ctx, filterType, filterEntities, "SELECT changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(startTime.UnixNano()))
 }
 
-func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, query string, args ...any) error {
+func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, tableIds map[string][]int64, query string, args ...any) error {
 	var undoChangeSet ChangeSet
 	undoChangeSet.ProcessID = processID
 	undoChangeSet.Subject = s.subject
@@ -758,7 +757,6 @@ func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, qu
 		return err
 	}
 	defer rows.Close()
-	var tableIds map[string][]int64
 	first := true
 	for rows.Next() {
 		var data []byte
@@ -771,7 +769,7 @@ func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, qu
 		if err != nil {
 			return fmt.Errorf("failed to unmarshal changeset data for undo: %w", err)
 		}
-		if first && filter != haconnect.UndoFilterNone {
+		if first && len(tableIds) == 0 && filter != haconnect.UndoFilterNone {
 			first = false
 			tableIds = make(map[string][]int64)
 			for _, change := range cs.Changes {

@@ -628,12 +628,12 @@ func (c *Connector) HistoryByTime(ctx context.Context, duration time.Duration) (
 	return c.subscriber.HistoryByTime(ctx, duration)
 }
 
-func (c *Connector) UndoBySeq(ctx context.Context, startSeq uint64, filterEntity haconnect.UndoFilter) error {
-	return c.subscriber.UndoBySeq(ctx, startSeq, filterEntity)
+func (c *Connector) UndoBySeq(ctx context.Context, startSeq uint64, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error {
+	return c.subscriber.UndoBySeq(ctx, startSeq, filterType, filterEntities)
 }
 
-func (c *Connector) UndoByTime(ctx context.Context, duration time.Duration) error {
-	return c.subscriber.UndoByTime(ctx, duration)
+func (c *Connector) UndoByTime(ctx context.Context, duration time.Duration, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error {
+	return c.subscriber.UndoByTime(ctx, duration, filterType, filterEntities)
 }
 
 func (c *Connector) Close() {
@@ -794,8 +794,8 @@ type Subscriber interface {
 	DeliveredInfo(ctx context.Context, name string) (any, error)
 	HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error)
 	HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error)
-	UndoBySeq(ctx context.Context, startSeq uint64, filterType haconnect.UndoFilter) error
-	UndoByTime(ctx context.Context, duration time.Duration) error
+	UndoBySeq(ctx context.Context, startSeq uint64, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error
+	UndoByTime(ctx context.Context, duration time.Duration, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error
 }
 
 type ChangeSetInterceptor interface {

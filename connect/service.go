@@ -69,8 +69,8 @@ type HADB interface {
 	Backup(context.Context, io.Writer) error
 	HistoryBySeq(context.Context, uint64) ([]HistoryItem, error)
 	HistoryByTime(context.Context, time.Duration) ([]HistoryItem, error)
-	UndoBySeq(context.Context, uint64, UndoFilter) error
-	UndoByTime(context.Context, time.Duration) error
+	UndoBySeq(context.Context, uint64, UndoFilter, map[string][]int64) error
+	UndoByTime(context.Context, time.Duration, UndoFilter, map[string][]int64) error
 }
 
 type DBProvider func(id string) (HADB, bool)
@@ -326,15 +326,71 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 			sqlQuery = strings.ReplaceAll(sqlQuery, "\r", " ")
 			sqlQuery = strings.TrimSuffix(sqlQuery, ";")
 			parts := strings.Fields(sqlQuery)
-			if len(parts) > 2 {
+			// UNDO command can be in the form of (WHERE clause is optional):
+			// UNDO <stream sequence> WHERE <table>(<rowids>)
+			// UNDO <time duration> WHERE <table>(<rowids>)
+			if len(parts) > 4 || (len(parts) > 2 && !strings.EqualFold(parts[2], "WHERE")) {
 				err = stream.Send(&sqlv1.QueryResponse{
-					Error: "UNDO command requires exactly one argument: UNDO <stream sequence|time duration>",
+					Error: "UNDO command syntax: UNDO <stream sequence|time duration> [WHERE <table>(<rowids>)]",
 				})
 				if err != nil {
 					return err
 				}
 				continue
 			}
+			filterEntities := make(map[string][]int64)
+			if len(parts) == 4 {
+				whereClause := parts[3]
+				openParen := strings.Index(whereClause, "(")
+				closeParen := strings.Index(whereClause, ")")
+				if openParen == -1 || closeParen == -1 || closeParen < openParen {
+					err = stream.Send(&sqlv1.QueryResponse{
+						Error: "invalid WHERE clause syntax. Expected format: WHERE <table>(<rowids>)",
+					})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				table := whereClause[:openParen]
+				rowIdsStr := whereClause[openParen+1 : closeParen]
+				rowIdStrs := strings.Split(rowIdsStr, ",")
+				var rowIds []int64
+				for _, idStr := range rowIdStrs {
+					idStr = strings.TrimSpace(idStr)
+					id, err := strconv.ParseInt(idStr, 10, 64)
+					if err != nil {
+						err = stream.Send(&sqlv1.QueryResponse{
+							Error: fmt.Sprintf("invalid row id %q in WHERE clause", idStr),
+						})
+						if err != nil {
+							return err
+						}
+						continue
+					}
+					rowIds = append(rowIds, id)
+				}
+				if len(rowIds) == 0 {
+					err = stream.Send(&sqlv1.QueryResponse{
+						Error: "no valid row ids found in WHERE clause",
+					})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				if table == "" {
+					err = stream.Send(&sqlv1.QueryResponse{
+						Error: "table name cannot be empty in WHERE clause",
+					})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				filterEntities[table] = rowIds
+			}
+
 			var filter UndoFilter
 			switch {
 			case strings.HasPrefix(upperSQL, "UNDOT"):
@@ -345,7 +401,7 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				filter = UndoFilterNone
 			}
 			var seq uint64
-			if len(parts) == 2 {
+			if len(parts) > 1 {
 				seq, err = strconv.ParseUint(parts[1], 10, 64)
 				if err != nil {
 					if filter != UndoFilterNone {
@@ -367,7 +423,7 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 						}
 						continue
 					}
-					err = hadb.UndoByTime(ctx, duration)
+					err = hadb.UndoByTime(ctx, duration, filter, filterEntities)
 					if err != nil {
 						err = stream.Send(&sqlv1.QueryResponse{
 							Error: fmt.Sprintf("failed to undo transactions within %v: %v", duration, err),
@@ -385,7 +441,7 @@ func (s *Service) Query(ctx context.Context, stream *connect.BidiStream[sqlv1.Qu
 				}
 			}
 
-			err = hadb.UndoBySeq(ctx, seq, filter)
+			err = hadb.UndoBySeq(ctx, seq, filter, filterEntities)
 			if err != nil {
 				err = stream.Send(&sqlv1.QueryResponse{
 					Error: fmt.Sprintf("failed to undo transactions from stream sequence %d: %v", seq, err),

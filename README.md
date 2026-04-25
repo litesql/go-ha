@@ -25,6 +25,22 @@ A Go `database/sql` base driver providing high availability for SQLite databases
 
 go-ha enables high availability for SQLite by replicating changes across multiple nodes using NATS as the messaging backbone. Each node maintains a local SQLite database and publishes changes to a NATS stream. Other nodes subscribe to this stream and apply the changes, ensuring data consistency.
 
+## Comparison with SQLite Session Extension
+
+go-ha provides a modern alternative to [SQLite's session extension](https://sqlite.org/sessionintro.html) with enhanced capabilities:
+
+| Feature | go-ha | Session Extension |
+|---------|-------|-------------------|
+| DDL Replication | ✓ | ✗ |
+| DML Replication | ✓ | ✓ |
+| Multi-node Cluster | ✓ | ✗ |
+| NATS Integration | ✓ | ✗ |
+| Conflict Resolution | ✓ (Customizable) | Limited |
+| gRPC Support | ✓ | ✗ |
+| Cross-database Queries | ✓ | ✗ |
+
+go-ha is designed for distributed systems requiring schema synchronization across nodes, while the session extension is suited for simpler peer-to-peer synchronization.
+
 ## Installation
 
 ```bash

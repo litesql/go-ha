@@ -1,6 +1,7 @@
 package ha
 
 import (
+	"database/sql"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -212,6 +213,12 @@ func WithGrpcToken(token string) Option {
 func WithGrpcInsecure(insecure bool) Option {
 	return func(c *Connector) {
 		c.grpcInsecure = insecure
+	}
+}
+
+func WithProxiedDB(db *sql.DB) Option {
+	return func(c *Connector) {
+		c.SetProxiedDB(db)
 	}
 }
 

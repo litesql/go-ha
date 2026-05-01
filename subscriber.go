@@ -13,9 +13,10 @@ import (
 	"sync"
 	"time"
 
-	haconnect "github.com/litesql/go-ha/connect"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	haconnect "github.com/litesql/go-ha/connect"
 )
 
 type NoopSubscriber struct{}
@@ -209,7 +210,7 @@ func (s *NATSSubscriber) Start() error {
 	}
 
 	var recv uint64
-	err = conn.QueryRowContext(context.Background(), "SELECT received_seq FROM "+controlTableName+" WHERE subject = ?", s.subject).Scan(&recv)
+	err = conn.QueryRowContext(ContextLocalDB(context.Background(), true), "SELECT received_seq FROM "+controlTableName+" WHERE subject = ?", s.subject).Scan(&recv)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}

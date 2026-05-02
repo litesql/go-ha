@@ -123,7 +123,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		}
 	}
 
-	_, errStats := conn.ExecContext(context.Background(), "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+	_, errStats := conn.ExecContext(ContextLocalDB(context.Background(), true), "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
 	if errStats != nil {
 		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)

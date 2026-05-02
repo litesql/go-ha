@@ -539,20 +539,8 @@ func (s *Service) execUpdate(ctx context.Context, stream *connect.BidiStream[sql
 			Error: err.Error(),
 		})
 	}
-	lastInsertID, err := res.LastInsertId()
-	if err != nil {
-		return stream.Send(&sqlv1.QueryResponse{
-			Error: err.Error(),
-		})
-	}
-
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		return stream.Send(&sqlv1.QueryResponse{
-			Error: err.Error(),
-		})
-	}
-
+	lastInsertID, _ := res.LastInsertId()
+	rowsAffected, _ := res.RowsAffected()
 	return stream.Send(&sqlv1.QueryResponse{
 		LastInsertId: lastInsertID,
 		RowsAffected: rowsAffected,

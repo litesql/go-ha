@@ -75,7 +75,8 @@ func (cs *ChangeSet) Send(pub Publisher) error {
 }
 
 func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
-	conn, err := db.Conn(context.Background())
+	ctx := ContextLocalDB(context.Background(), true)
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return
 	}
@@ -101,7 +102,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	if len(cs.Changes) == 0 {
 		return nil
 	}
-	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{})
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return
 	}
@@ -115,7 +116,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 			continue
 		}
 		slog.Debug("applying change", "sql", sql, "args", args)
-		_, err = tx.Exec(sql, args...)
+		_, err = tx.ExecContext(ctx, sql, args...)
 		if err != nil {
 			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
 			err = errors.Join(err, tx.Rollback())
@@ -123,7 +124,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		}
 	}
 
-	_, errStats := conn.ExecContext(ContextLocalDB(context.Background(), true), "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+	_, errStats := tx.ExecContext(ctx, "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
 	if errStats != nil {
 		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
@@ -190,7 +191,7 @@ func (cs *ChangeSet) propagate(ctx context.Context, db *sql.DB) (err error) {
 			continue
 		}
 		slog.Debug("propagating change", "sql", sql, "args", args)
-		_, err = tx.Exec(sql, args...)
+		_, err = tx.ExecContext(ctx, sql, args...)
 		if err != nil {
 			slog.Error("failed to propagate change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
 			err = errors.Join(err, tx.Rollback())

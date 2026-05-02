@@ -560,7 +560,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		}
 		defer s.connProvider.EnableHooks(conn)
 
-		_, err = conn.ExecContext(context.Background(),
+		_, err = conn.ExecContext(ContextLocalDB(context.Background(), true),
 			"REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 			s.subject, meta.Sequence.Stream, time.Now().Format(time.RFC3339Nano))
 		if err != nil {

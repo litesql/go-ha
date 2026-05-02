@@ -218,7 +218,7 @@ func WithGrpcInsecure(insecure bool) Option {
 
 func WithProxiedDB(db *sql.DB) Option {
 	return func(c *Connector) {
-		c.SetProxiedDB(db)
+		c.proxiedDB = db
 	}
 }
 

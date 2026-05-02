@@ -396,7 +396,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
-	slog.Debug("go-ha connector created", "dsn", dsn, "replication_id", c.replicationID, "node_name", c.name, "pub", fmt.Sprintf("%T", c.publisher), "sub", fmt.Sprintf("%T", c.subscriber), "snapshotter", fmt.Sprintf("%T", c.snapshotter))
+	slog.Debug("go-ha connector created", "dsn", dsn, "replication_id", c.replicationID, "node_name", c.name, "pub", fmt.Sprintf("%T", c.publisher), "sub", fmt.Sprintf("%T", c.subscriber), "snapshotter", fmt.Sprintf("%T", c.snapshotter), "proxiedDB", c.proxiedDB != nil)
 
 	connectors[dsn] = &c
 	return &c, nil

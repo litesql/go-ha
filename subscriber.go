@@ -204,13 +204,15 @@ func (s *NATSSubscriber) Start() error {
 	}
 	defer s.connProvider.EnableHooks(conn)
 
-	_, err = conn.ExecContext(context.Background(), "CREATE TABLE IF NOT EXISTS "+controlTableName+"(subject TEXT UNIQUE, received_seq INTEGER, updated_at DATETIME)")
+	ctx := ContextLocalDB(context.Background(), true)
+
+	_, err = conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS "+controlTableName+"(subject TEXT UNIQUE, received_seq INTEGER, updated_at DATETIME)")
 	if err != nil {
 		return err
 	}
 
 	var recv uint64
-	err = conn.QueryRowContext(ContextLocalDB(context.Background(), true), "SELECT received_seq FROM "+controlTableName+" WHERE subject = ?", s.subject).Scan(&recv)
+	err = conn.QueryRowContext(ctx, "SELECT received_seq FROM "+controlTableName+" WHERE subject = ?", s.subject).Scan(&recv)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -627,7 +629,7 @@ func (s *DBSubscriber) SetDB(db *sql.DB) {
 }
 
 func (s *DBSubscriber) Start() error {
-	return s.historyDB.QueryRow("SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&s.subject)
+	return s.historyDB.QueryRowContext(ContextLocalDB(context.Background(), true), "SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&s.subject)
 }
 
 func (s *DBSubscriber) LatestSeq() uint64 {
@@ -635,7 +637,7 @@ func (s *DBSubscriber) LatestSeq() uint64 {
 		return 0
 	}
 	var seq sql.NullInt64
-	err := s.historyDB.QueryRow("SELECT MAX(seq) FROM ha_changesets").Scan(&seq)
+	err := s.historyDB.QueryRowContext(ContextLocalDB(context.Background(), true), "SELECT MAX(seq) FROM ha_changesets").Scan(&seq)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0
@@ -661,7 +663,7 @@ func (s *DBSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]hac
 	if startSeq == 0 {
 		startSeq = s.LatestSeq()
 	}
-	rows, err := s.historyDB.Query("SELECT seq, changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
+	rows, err := s.historyDB.QueryContext(ContextLocalDB(ctx, true), "SELECT seq, changeset FROM ha_changesets WHERE seq >= ? ORDER BY seq ASC", startSeq)
 	if err != nil {
 		return nil, err
 	}
@@ -693,7 +695,7 @@ func (s *DBSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]hac
 }
 
 func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error) {
-	rows, err := s.historyDB.Query("SELECT seq, changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(time.Now().Add(-duration).UnixNano()))
+	rows, err := s.historyDB.QueryContext(ContextLocalDB(ctx, true), "SELECT seq, changeset FROM ha_changesets WHERE timestamp >= ? ORDER BY seq ASC", fmt.Sprint(time.Now().Add(-duration).UnixNano()))
 	if err != nil {
 		return nil, err
 	}
@@ -753,7 +755,7 @@ func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, ta
 	undoChangeSet.SetStrategy(s.applyStrategy)
 	undoChangeSet.SetConnProvider(s.connProvider)
 	undoChangeSet.SetInterceptor(s.interceptor)
-	rows, err := s.historyDB.Query(query, args...)
+	rows, err := s.historyDB.QueryContext(ContextLocalDB(ctx, true), query, args...)
 	if err != nil {
 		return err
 	}

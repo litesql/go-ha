@@ -274,3 +274,8 @@ type LeaderProvider interface {
 	Ready() chan struct{}
 	RedirectTarget() string
 }
+
+type ProxiedPositionProvider interface {
+	SourcePosition(context.Context) (uint64, error)
+	ReplicaPosition(context.Context) (uint64, error)
+}

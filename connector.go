@@ -68,7 +68,8 @@ type Connector struct {
 	grpcToken    string
 	grpcInsecure bool
 
-	proxiedDB *sql.DB
+	proxiedDB               *sql.DB
+	proxiedPositionProvider ProxiedPositionProvider
 
 	closers []io.Closer
 }
@@ -408,6 +409,14 @@ func (c *Connector) SetProxiedDB(db *sql.DB) {
 
 func (c *Connector) ProxiedDB() *sql.DB {
 	return c.proxiedDB
+}
+
+func (c *Connector) SetProxiedPositionProvider(provider ProxiedPositionProvider) {
+	c.proxiedPositionProvider = provider
+}
+
+func (c *Connector) ProxiedPositionProvider() ProxiedPositionProvider {
+	return c.proxiedPositionProvider
 }
 
 func (c *Connector) Start(db *sql.DB) error {

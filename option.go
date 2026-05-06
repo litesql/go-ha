@@ -222,6 +222,12 @@ func WithProxiedDB(db *sql.DB) Option {
 	}
 }
 
+func WithProxiedPositionProvider(provider ProxiedPositionProvider) Option {
+	return func(c *Connector) {
+		c.proxiedPositionProvider = provider
+	}
+}
+
 func WithQueryRouter(re *regexp.Regexp) Option {
 	return func(c *Connector) {
 		c.queryRouter = re

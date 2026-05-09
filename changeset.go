@@ -116,11 +116,29 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 			continue
 		}
 		slog.Debug("applying change", "sql", sql, "args", args)
-		_, err = tx.ExecContext(ctx, sql, args...)
+		res, err := tx.ExecContext(ctx, sql, args...)
 		if err != nil {
 			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
 			err = errors.Join(err, tx.Rollback())
 			return err
+		}
+		if change.Operation == "UPDATE" {
+			affected, err := res.RowsAffected()
+			if err != nil || affected > 0 {
+				continue
+			}
+			change.Operation = "INSERT"
+			sql, args := cs.strategy.ToSQL(change)
+			if sql == "" {
+				continue
+			}
+			slog.Debug("applying change", "sql", sql, "args", args)
+			_, err = tx.ExecContext(ctx, sql, args...)
+			if err != nil {
+				slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
+				err = errors.Join(err, tx.Rollback())
+				return err
+			}
 		}
 	}
 

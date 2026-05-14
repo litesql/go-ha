@@ -81,36 +81,6 @@ func UnverifiedStatement(source string, hasDistinct bool,
 }
 
 func ParseStatement(ctx context.Context, source string) (*Statement, error) {
-	// PgWire Begin statement has a different syntax
-	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "BEGIN") {
-		return &Statement{
-			source:           source,
-			typ:              TypeBegin,
-			modifiesDatabase: true,
-		}, nil
-	}
-	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "ATTACH ") {
-		return &Statement{
-			source:           source,
-			typ:              TypeOther,
-			modifiesDatabase: false,
-		}, nil
-	}
-	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "DETACH ") {
-		return &Statement{
-			source:           source,
-			typ:              TypeOther,
-			modifiesDatabase: false,
-		}, nil
-	}
-	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(source)), "VACUUM") {
-		return &Statement{
-			source:           source,
-			typ:              TypeOther,
-			modifiesDatabase: false,
-		}, nil
-	}
-
 	statements, ok := cache.Get(source)
 	if !ok {
 		var err error
@@ -464,7 +434,7 @@ func parse(ctx context.Context, source string) ([]*Statement, error) {
 	p := sql.NewParser(strings.NewReader(source))
 	parsed, err := p.ParseStatements()
 	if err != nil {
-		return nil, err
+		return flexibleParser(source, err)
 	}
 	var statements []*Statement
 	for _, query := range parsed {
@@ -478,4 +448,61 @@ func parse(ctx context.Context, source string) ([]*Statement, error) {
 		statements = append(statements, stmt)
 	}
 	return statements, nil
+}
+
+func flexibleParser(source string, originalError error) ([]*Statement, error) {
+
+	upper := strings.TrimSuffix(strings.ToUpper(strings.TrimSpace(source)), ";")
+	if strings.Count(upper, ";") > 0 {
+		return nil, originalError
+	}
+
+	// PgWire Begin statement has a different syntax
+	if strings.HasPrefix(upper, "BEGIN") {
+		return []*Statement{
+			{
+				source:           source,
+				typ:              TypeBegin,
+				modifiesDatabase: true,
+			},
+		}, nil
+	}
+	if strings.HasPrefix(upper, "ATTACH ") {
+		return []*Statement{
+			{
+				source:           source,
+				typ:              TypeOther,
+				modifiesDatabase: false,
+			},
+		}, nil
+	}
+	if strings.HasPrefix(upper, "DETACH ") {
+		return []*Statement{
+			{
+				source:           source,
+				typ:              TypeOther,
+				modifiesDatabase: false,
+			},
+		}, nil
+	}
+	if strings.HasPrefix(upper, "VACUUM") {
+		return []*Statement{
+			{
+				source:           source,
+				typ:              TypeOther,
+				modifiesDatabase: false,
+			},
+		}, nil
+	}
+	if strings.HasPrefix(upper, "CREATE VIRTUAL TABLE ") {
+		return []*Statement{
+			{
+				source:           source,
+				typ:              TypeCreateVirtualTable,
+				modifiesDatabase: true,
+			},
+		}, nil
+	}
+
+	return nil, originalError
 }

@@ -222,6 +222,7 @@ func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
 		s.modifiesDatabase = true
 		s.hasIfExists = n.IfNotExists.IsValid()
 		s.hasModifier = true
+		s.ddl = true
 		s.typ = TypeCreateVirtualTable
 	case *sql.AlterTableStatement:
 		s.modifiesDatabase = true
@@ -500,6 +501,7 @@ func flexibleParser(source string, originalError error) ([]*Statement, error) {
 				source:           source,
 				typ:              TypeCreateVirtualTable,
 				modifiesDatabase: true,
+				ddl:              true,
 			},
 		}, nil
 	}

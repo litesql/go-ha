@@ -169,6 +169,7 @@ go-ha provides several driver implementations:
 | leaderProvider         | Leader election strategy (e.g., `dynamic:local-host:port`, `static:remote-host:port`).                |                 |
 | name                   | Node name in the cluster.                                                   |                 |
 | natsConfigFile         | Path to NATS server config file.                                            |                 |
+| natsMaxPayload         | Maximum allowed payload size for embedded NATS messages (bytes).           |                 |
 | natsName               | Name for embedded NATS server.                                              |                 |
 | natsPort               | Port for embedded NATS server.                                              | 4222            |
 | natsStoreDir           | Data directory for embedded NATS server.                                    |                 |

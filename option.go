@@ -36,6 +36,7 @@ type EmbeddedNatsConfig struct {
 	User           string
 	Pass           string
 	File           string
+	MaxPayload     int32
 	WebSocketPort  int
 	WebSocketNoTLS bool
 	EnableLogs     bool
@@ -347,6 +348,12 @@ func NameToOptions(name string) (string, []Option, error) {
 			natsConfig.User = value
 		case "natsPass":
 			natsConfig.Pass = value
+		case "natsMaxPayload":
+			maxPayload, err := strconv.ParseInt(value, 10, 32)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid natsMaxPayload: %w", err)
+			}
+			natsConfig.MaxPayload = int32(maxPayload)
 		case "disableDDLSync":
 			disable, err := strconv.ParseBool(value)
 			if err != nil {

@@ -34,6 +34,7 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 			ServerName: cfg.Name,
 			Port:       cfg.Port,
 			StoreDir:   cfg.StoreDir,
+			MaxPayload: cfg.MaxPayload,
 		}
 		if cfg.WebSocketPort > 0 {
 			opts.Websocket.Port = cfg.WebSocketPort

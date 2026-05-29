@@ -233,15 +233,23 @@ func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
 		s.typ = TypeAnalyze
 	case *sql.DropTableStatement:
 		s.modifiesDatabase = true
+		s.ddl = true
+		s.hasIfExists = n.IfExists.IsValid()
 		s.typ = TypeDrop
 	case *sql.DropIndexStatement:
 		s.modifiesDatabase = true
+		s.ddl = true
+		s.hasIfExists = n.IfExists.IsValid()
 		s.typ = TypeDrop
 	case *sql.DropTriggerStatement:
 		s.modifiesDatabase = true
+		s.ddl = true
+		s.hasIfExists = n.IfExists.IsValid()
 		s.typ = TypeDrop
 	case *sql.DropViewStatement:
 		s.modifiesDatabase = true
+		s.ddl = true
+		s.hasIfExists = n.IfExists.IsValid()
 		s.typ = TypeDrop
 	case *sql.PragmaStatement:
 		s.modifiesDatabase = false

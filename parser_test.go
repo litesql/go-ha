@@ -542,3 +542,50 @@ func TestAggregateFunctions(t *testing.T) {
 		})
 	}
 }
+
+func TestDDLStatements(t *testing.T) {
+	tests := map[string]struct {
+		sql      string
+		hasError bool
+		wantDDL  bool
+	}{
+		"create table": {
+			sql:      "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)",
+			hasError: false,
+			wantDDL:  true,
+		},
+		"alter table": {
+			sql:      "ALTER TABLE user ADD COLUMN age INTEGER",
+			hasError: false,
+			wantDDL:  true,
+		},
+		"drop table": {
+			sql:      "DROP TABLE IF EXISTS test",
+			hasError: false,
+			wantDDL:  true,
+		},
+		"select": {
+			sql:      "SELECT * FROM user",
+			hasError: false,
+			wantDDL:  false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stmt, err := ParseStatement(context.TODO(), tc.sql)
+			if tc.hasError && err == nil {
+				t.Fatalf("expected error but got none")
+			}
+			if !tc.hasError && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantDDL && !stmt.ddl {
+				t.Fatalf("expected DDL statement but got none")
+			}
+			if !tc.wantDDL && stmt.ddl {
+				t.Fatalf("expected non-DDL statement but got DDL")
+			}
+		})
+	}
+}

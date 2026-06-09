@@ -148,6 +148,7 @@ go-ha provides several driver implementations:
 - **[go-sqlite3-ha](https://github.com/litesql/go-sqlite3-ha)**: CGO-based driver using `go-sqlite3`.
 - **[go-sqlite-ha](https://github.com/litesql/go-sqlite-ha)**: CGO-free driver using `modernc.org/sqlite`.
 - **[go-remote-ha](https://github.com/litesql/go-remote-ha)**: Remote-only driver for accessing HA clusters via gRPC.
+- **[go-sqlite3-wasm-ha](https://github.com/litesql/go-sqlite3-wasm-ha)**: CGO-free driver using `github.com/ncruces/go-sqlite3`.
 
 ## Configuration Options
 

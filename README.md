@@ -177,7 +177,7 @@ go-ha provides several driver implementations:
 | publisherTimeout       | Timeout for publishing replication events.                                  | 15s             |
 | replicationStream      | Name of the NATS stream for replication.                                    |                 |
 | replicationURL         | NATS server URL for replication.                                            |                 |
-| replicas               | Number of replicas for high availability.                                   | 1               |
+| replicas               | Number of replicas for high availability (replication stream, snapshots and the leader election bucket). | 1               |
 | rowIdentify            | Row identification strategy: `pk`, `rowid`, or `full`.                      | pk              |
 | snapshotInterval       | Interval between database snapshots.                                        | 1m              |
 | streamMaxAge           | Maximum age of messages in replication stream.                              |                 |

@@ -63,7 +63,7 @@ func (d *DynamicLeader) setTarget(newTarget string) {
 	d.target = newTarget
 }
 
-func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Conn, subject string, clusterSize int, logFile string) (*DynamicLeader, error) {
+func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Conn, subject string, clusterSize int, replicas int, logFile string) (*DynamicLeader, error) {
 	rpc, err := graft.NewNatsRpcFromConn(nc)
 	if err != nil {
 		return nil, err
@@ -86,19 +86,17 @@ func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 		return nil, err
 	}
 
-	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket: clusterName,
-		TTL:    1 * time.Minute,
+	// The bucket holds the only copy of the redirect target. Keep it on as many
+	// replicas as the replication stream, otherwise it is lost together with the
+	// node that created it and the newly elected leader can neither read nor
+	// write the redirect key.
+	kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:   clusterName,
+		TTL:      1 * time.Minute,
+		Replicas: replicas,
 	})
 	if err != nil {
-		if errors.Is(err, jetstream.ErrBucketExists) {
-			kv, err = js.KeyValue(ctx, clusterName)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	dl := DynamicLeader{

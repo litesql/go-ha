@@ -150,6 +150,7 @@ func ConnectHandler(opts ...connect.HandlerOption) (path string, handler http.Ha
 				return nil, fmt.Errorf("connector not found: %s", csr.ReplicationId)
 			}
 			cs := changeSetFromProto(csr)
+			cs.SetInterceptor(connector.interceptor)
 			cs.SetConnProvider(connector.connHooksProvider)
 			return cs, nil
 		},

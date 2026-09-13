@@ -91,9 +91,6 @@ func (cs *ChangeSet) Prepare(db *sql.DB) (conn *sql.Conn, tx *sql.Tx, err error)
 	}
 	defer cs.connProvider.EnableHooks(conn)
 	if cs.interceptor != nil {
-		defer func() {
-			err = cs.interceptor.AfterApply(cs, conn, err)
-		}()
 		var skip bool
 		skip, err = cs.interceptor.BeforeApply(cs, conn)
 		if err != nil {
@@ -155,6 +152,13 @@ func (cs *ChangeSet) Prepare(db *sql.DB) (conn *sql.Conn, tx *sql.Tx, err error)
 		}
 	}
 	return
+}
+
+func (cs *ChangeSet) AfterCommit(conn *sql.Conn, err error) error {
+	if cs.interceptor == nil {
+		return nil
+	}
+	return cs.interceptor.AfterApply(cs, conn, err)
 }
 
 func (cs *ChangeSet) Apply(db *sql.DB) (err error) {

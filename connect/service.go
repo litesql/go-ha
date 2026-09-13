@@ -77,6 +77,7 @@ type HADB interface {
 
 type TwoPhaseCommitWorker interface {
 	Prepare(*sql.DB) (*sql.Conn, *sql.Tx, error)
+	AfterCommit(conn *sql.Conn, err error) error
 	Undo(*sql.DB) error
 }
 
@@ -766,12 +767,15 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				}
 				continue
 			}
-			var msg string
+
 			err = tx.Commit()
+			if err == nil {
+				tx = nil
+			}
+			var msg string
+			err = errors.Join(err, worker.AfterCommit(conn, err))
 			if err != nil {
 				msg = err.Error()
-			} else {
-				tx = nil
 			}
 			if err := stream.Send(&sqlv1.ChangeSetResponse{Error: msg}); err != nil {
 				return err

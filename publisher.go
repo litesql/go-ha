@@ -490,7 +490,14 @@ func (p *CompositePublisher) Publish(cs *ChangeSet) error {
 }
 
 func (p *CompositePublisher) Sequence() uint64 {
-	return 0
+	var max uint64
+	for _, pub := range p.publishers {
+		x := pub.Sequence()
+		if max < x {
+			max = x
+		}
+	}
+	return max
 }
 
 type delayedStartPublisher struct {

@@ -147,10 +147,12 @@ func (cs *ChangeSet) Prepare(db *sql.DB) (conn *sql.Conn, tx *sql.Tx, err error)
 		}
 	}
 
-	_, errStats := tx.ExecContext(ctx, "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
-		cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
-	if errStats != nil {
-		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
+	if cs.Subject != "" {
+		_, errStats := tx.ExecContext(ctx, "REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
+			cs.Subject, cs.StreamSeq, time.Now().Format(time.RFC3339Nano))
+		if errStats != nil {
+			slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
+		}
 	}
 	return
 }

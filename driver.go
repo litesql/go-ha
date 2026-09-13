@@ -18,6 +18,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
 	"github.com/litesql/go-ha/api/sql/v1/sqlv1connect"
 	haconnect "github.com/litesql/go-ha/connect"
 )
@@ -142,6 +143,15 @@ func ConnectHandler(opts ...connect.HandlerOption) (path string, handler http.Ha
 			}
 			expectResultSet := stmt.HasReturning() || stmt.IsSelect() || stmt.IsExplain()
 			return expectResultSet, nil
+		},
+		TwoPhaseCommitWorkerConverter: func(csr *sqlv1.ChangeSetRequest) (haconnect.TwoPhaseCommitWorker, error) {
+			connector, ok := LookupConnectorByReplicationID(csr.ReplicationId)
+			if !ok {
+				return nil, fmt.Errorf("connector not found: %s", csr.ReplicationId)
+			}
+			cs := changeSetFromProto(csr)
+			cs.SetConnProvider(connector.connHooksProvider)
+			return cs, nil
 		},
 	}, opts...)
 }

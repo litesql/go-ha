@@ -2,17 +2,24 @@ package ha
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var processID = time.Now().UnixNano()
@@ -316,6 +323,174 @@ func (p *DBPublisher) cleaner() {
 			p.mu.Unlock()
 		}
 	}
+}
+
+type TwoPhaseCommitPublisher struct {
+	sequence uint64
+	timeout  time.Duration
+	workers  []sqlv1.DatabaseServiceClient
+}
+
+func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Duration) (*TwoPhaseCommitPublisher, error) {
+	var workers []sqlv1.DatabaseServiceClient
+	for remote, token := range workersKeys {
+		u, err := url.Parse(remote)
+		if err != nil {
+			slog.Error("parse url", "error", err)
+			return nil, err
+		}
+
+		var dialOpts []grpc.DialOption
+
+		if strings.HasPrefix(remote, "http://") {
+			dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		} else {
+			dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
+		}
+		if token != "" {
+			dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(grpcCredentials{token: token}))
+		}
+
+		cc, err := grpc.NewClient(u.Host, dialOpts...)
+		if err != nil {
+			slog.Error("grpc connect", "error", err)
+			return nil, err
+		}
+		workers = append(workers, sqlv1.NewDatabaseServiceClient(cc))
+	}
+	return &TwoPhaseCommitPublisher{
+		sequence: 1,
+		timeout:  timeout,
+		workers:  workers,
+	}, nil
+}
+
+func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
+	req, err := changeSetToProto(cs)
+	if err != nil {
+		return err
+	}
+	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE
+
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+
+	var streams []grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]
+	// connect
+	for _, w := range p.workers {
+		stream, err := w.ChangeSet(ctx)
+		if err != nil {
+			return err
+		}
+		streams = append(streams, stream)
+	}
+
+	defer func() {
+		for _, stream := range streams {
+			stream.CloseSend()
+		}
+	}()
+
+	// prepare
+	for _, stream := range streams {
+		err = stream.Send(req)
+		if err != nil {
+			return err
+		}
+
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		if resp.Error != "" {
+			return fmt.Errorf("worker prepare: %s", resp.Error)
+		}
+	}
+
+	// commit
+	var commitedStreams []grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]
+	defer func() {
+		if err == nil {
+			return
+		}
+		req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO
+		for _, stream := range commitedStreams {
+			err = stream.Send(req)
+			if err != nil {
+				slog.Error("failed to send undo message", "error", err)
+				continue
+			}
+			resp, err := stream.Recv()
+			if err != nil {
+				slog.Error("failed to receive undo response", "error", err)
+				continue
+			}
+			if resp.Error != "" {
+				slog.Error("failed to undo transaction", "error", resp.Error)
+			}
+		}
+	}()
+	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
+	for _, stream := range streams {
+		err = stream.Send(req)
+		if err != nil {
+			return err
+		}
+
+		var resp *sqlv1.ChangeSetResponse
+		resp, err = stream.Recv()
+		if err != nil {
+			return err
+		}
+		if resp.Error != "" {
+			return fmt.Errorf("worker commit: %s", resp.Error)
+		}
+		commitedStreams = append(commitedStreams, stream)
+	}
+	p.sequence++
+	return nil
+}
+
+func (p *TwoPhaseCommitPublisher) Sequence() uint64 {
+	return p.sequence
+}
+
+type grpcCredentials struct {
+	token string
+}
+
+func (c grpcCredentials) GetRequestMetadata(ctx context.Context, in ...string) (map[string]string, error) {
+	return map[string]string{
+		"authorization": c.token,
+	}, nil
+}
+
+func (c grpcCredentials) RequireTransportSecurity() bool {
+	return false
+}
+
+type CompositePublisher struct {
+	publishers []Publisher
+}
+
+func NewCompositePublisher(publishers ...Publisher) *CompositePublisher {
+	return &CompositePublisher{
+		publishers: publishers,
+	}
+}
+
+func (p *CompositePublisher) Publish(cs *ChangeSet) error {
+	for _, pub := range p.publishers {
+		err := pub.Publish(cs)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *CompositePublisher) Sequence() uint64 {
+	return 0
 }
 
 type delayedStartPublisher struct {

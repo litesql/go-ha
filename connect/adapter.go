@@ -89,6 +89,17 @@ func FromAnypb(p *anypb.Any) any {
 	}
 }
 
+func FromAnypbList(p []*anypb.Any) []any {
+	if p == nil {
+		return nil
+	}
+	list := make([]any, len(p))
+	for i, item := range p {
+		list[i] = FromAnypb(item)
+	}
+	return list
+}
+
 func ToAnypb(val any) (*anypb.Any, error) {
 	var m proto.Message
 	switch v := val.(type) {
@@ -124,4 +135,19 @@ func ToAnypb(val any) (*anypb.Any, error) {
 		return nil, fmt.Errorf("unsupported type: %T", v)
 	}
 	return anypb.New(m)
+}
+
+func ToAnypbList(val []any) ([]*anypb.Any, error) {
+	if val == nil {
+		return nil, nil
+	}
+	list := make([]*anypb.Any, len(val))
+	for i, item := range val {
+		pbVal, err := ToAnypb(item)
+		if err != nil {
+			return nil, err
+		}
+		list[i] = pbVal
+	}
+	return list, nil
 }

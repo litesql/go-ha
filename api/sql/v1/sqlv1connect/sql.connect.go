@@ -47,6 +47,9 @@ const (
 	// DatabaseServiceReplicationIDsProcedure is the fully-qualified name of the DatabaseService's
 	// ReplicationIDs RPC.
 	DatabaseServiceReplicationIDsProcedure = "/sql.v1.DatabaseService/ReplicationIDs"
+	// DatabaseServiceChangeSetProcedure is the fully-qualified name of the DatabaseService's ChangeSet
+	// RPC.
+	DatabaseServiceChangeSetProcedure = "/sql.v1.DatabaseService/ChangeSet"
 )
 
 // DatabaseServiceClient is a client for the sql.v1.DatabaseService service.
@@ -56,6 +59,7 @@ type DatabaseServiceClient interface {
 	Download(context.Context, *connect.Request[v1.DownloadRequest]) (*connect.ServerStreamForClient[v1.DownloadResponse], error)
 	LatestSnapshot(context.Context, *connect.Request[v1.LatestSnapshotRequest]) (*connect.ServerStreamForClient[v1.LatestSnapshotResponse], error)
 	ReplicationIDs(context.Context, *connect.Request[v1.ReplicationIDsRequest]) (*connect.Response[v1.ReplicationIDsResponse], error)
+	ChangeSet(context.Context) *connect.BidiStreamForClient[v1.ChangeSetRequest, v1.ChangeSetResponse]
 }
 
 // NewDatabaseServiceClient constructs a client for the sql.v1.DatabaseService service. By default,
@@ -99,6 +103,12 @@ func NewDatabaseServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(databaseServiceMethods.ByName("ReplicationIDs")),
 			connect.WithClientOptions(opts...),
 		),
+		changeSet: connect.NewClient[v1.ChangeSetRequest, v1.ChangeSetResponse](
+			httpClient,
+			baseURL+DatabaseServiceChangeSetProcedure,
+			connect.WithSchema(databaseServiceMethods.ByName("ChangeSet")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -109,6 +119,7 @@ type databaseServiceClient struct {
 	download        *connect.Client[v1.DownloadRequest, v1.DownloadResponse]
 	latestSnapshot  *connect.Client[v1.LatestSnapshotRequest, v1.LatestSnapshotResponse]
 	replicationIDs  *connect.Client[v1.ReplicationIDsRequest, v1.ReplicationIDsResponse]
+	changeSet       *connect.Client[v1.ChangeSetRequest, v1.ChangeSetResponse]
 }
 
 // Query calls sql.v1.DatabaseService.Query.
@@ -136,6 +147,11 @@ func (c *databaseServiceClient) ReplicationIDs(ctx context.Context, req *connect
 	return c.replicationIDs.CallUnary(ctx, req)
 }
 
+// ChangeSet calls sql.v1.DatabaseService.ChangeSet.
+func (c *databaseServiceClient) ChangeSet(ctx context.Context) *connect.BidiStreamForClient[v1.ChangeSetRequest, v1.ChangeSetResponse] {
+	return c.changeSet.CallBidiStream(ctx)
+}
+
 // DatabaseServiceHandler is an implementation of the sql.v1.DatabaseService service.
 type DatabaseServiceHandler interface {
 	Query(context.Context, *connect.BidiStream[v1.QueryRequest, v1.QueryResponse]) error
@@ -143,6 +159,7 @@ type DatabaseServiceHandler interface {
 	Download(context.Context, *connect.Request[v1.DownloadRequest], *connect.ServerStream[v1.DownloadResponse]) error
 	LatestSnapshot(context.Context, *connect.Request[v1.LatestSnapshotRequest], *connect.ServerStream[v1.LatestSnapshotResponse]) error
 	ReplicationIDs(context.Context, *connect.Request[v1.ReplicationIDsRequest]) (*connect.Response[v1.ReplicationIDsResponse], error)
+	ChangeSet(context.Context, *connect.BidiStream[v1.ChangeSetRequest, v1.ChangeSetResponse]) error
 }
 
 // NewDatabaseServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -182,6 +199,12 @@ func NewDatabaseServiceHandler(svc DatabaseServiceHandler, opts ...connect.Handl
 		connect.WithSchema(databaseServiceMethods.ByName("ReplicationIDs")),
 		connect.WithHandlerOptions(opts...),
 	)
+	databaseServiceChangeSetHandler := connect.NewBidiStreamHandler(
+		DatabaseServiceChangeSetProcedure,
+		svc.ChangeSet,
+		connect.WithSchema(databaseServiceMethods.ByName("ChangeSet")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/sql.v1.DatabaseService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case DatabaseServiceQueryProcedure:
@@ -194,6 +217,8 @@ func NewDatabaseServiceHandler(svc DatabaseServiceHandler, opts ...connect.Handl
 			databaseServiceLatestSnapshotHandler.ServeHTTP(w, r)
 		case DatabaseServiceReplicationIDsProcedure:
 			databaseServiceReplicationIDsHandler.ServeHTTP(w, r)
+		case DatabaseServiceChangeSetProcedure:
+			databaseServiceChangeSetHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -221,4 +246,8 @@ func (UnimplementedDatabaseServiceHandler) LatestSnapshot(context.Context, *conn
 
 func (UnimplementedDatabaseServiceHandler) ReplicationIDs(context.Context, *connect.Request[v1.ReplicationIDsRequest]) (*connect.Response[v1.ReplicationIDsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("sql.v1.DatabaseService.ReplicationIDs is not implemented"))
+}
+
+func (UnimplementedDatabaseServiceHandler) ChangeSet(context.Context, *connect.BidiStream[v1.ChangeSetRequest, v1.ChangeSetResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("sql.v1.DatabaseService.ChangeSet is not implemented"))
 }

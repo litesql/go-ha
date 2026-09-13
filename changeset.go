@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
 	haconnect "github.com/litesql/go-ha/connect"
 )
 
@@ -30,6 +32,7 @@ type ChangeSet struct {
 
 type sqlStrategy interface {
 	ToSQL(Change) (string, []any)
+	Name() string
 }
 
 var defaultStrategy = pkIdentifyStrategy{}
@@ -74,16 +77,16 @@ func (cs *ChangeSet) Send(pub Publisher) error {
 	return pub.Publish(cs)
 }
 
-func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
+func (cs *ChangeSet) Prepare(db *sql.DB) (conn *sql.Conn, tx *sql.Tx, err error) {
 	ctx := ContextLocalDB(context.Background(), true)
-	conn, err := db.Conn(ctx)
+	conn, err = db.Conn(ctx)
 	if err != nil {
 		return
 	}
-	defer conn.Close()
 
 	err = cs.connProvider.DisableHooks(conn)
 	if err != nil {
+		err = errors.Join(err, conn.Close())
 		return
 	}
 	defer cs.connProvider.EnableHooks(conn)
@@ -91,53 +94,55 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		defer func() {
 			err = cs.interceptor.AfterApply(cs, conn, err)
 		}()
-		skip, err := cs.interceptor.BeforeApply(cs, conn)
+		var skip bool
+		skip, err = cs.interceptor.BeforeApply(cs, conn)
 		if err != nil {
-			return err
+			return
 		}
 		if skip {
-			return nil
+			return
 		}
 	}
 	if len(cs.Changes) == 0 {
-		return nil
+		return
 	}
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{})
+
+	tx, err = conn.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return
 	}
-	defer tx.Rollback()
 	for _, change := range cs.Changes {
 		if change.Table == controlTableName {
 			continue
 		}
-		sql, args := cs.strategy.ToSQL(change)
-		if sql == "" {
+		sqlQuery, args := cs.strategy.ToSQL(change)
+		if sqlQuery == "" {
 			continue
 		}
-		slog.Debug("applying change", "sql", sql, "args", args)
-		res, err := tx.ExecContext(ctx, sql, args...)
+		slog.Debug("applying change", "sql", sqlQuery, "args", args)
+		var res sql.Result
+		res, err = tx.ExecContext(ctx, sqlQuery, args...)
 		if err != nil {
-			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
+			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sqlQuery)
 			err = errors.Join(err, tx.Rollback())
-			return err
+			return
 		}
 		if change.Operation == "UPDATE" {
-			affected, err := res.RowsAffected()
+			var affected int64
+			affected, err = res.RowsAffected()
 			if err != nil || affected > 0 {
 				continue
 			}
 			change.Operation = "INSERT"
-			sql, args := cs.strategy.ToSQL(change)
-			if sql == "" {
+			sqlQuery, args := cs.strategy.ToSQL(change)
+			if sqlQuery == "" {
 				continue
 			}
-			slog.Debug("applying change", "sql", sql, "args", args)
-			_, err = tx.ExecContext(ctx, sql, args...)
+			slog.Debug("applying change", "sql", sqlQuery, "args", args)
+			_, err = tx.ExecContext(ctx, sqlQuery, args...)
 			if err != nil {
-				slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
-				err = errors.Join(err, tx.Rollback())
-				return err
+				slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sqlQuery)
+				return
 			}
 		}
 	}
@@ -147,8 +152,34 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	if errStats != nil {
 		slog.Error("failed to update "+controlTableName+" table when applying changeset", "subject", cs.Subject, "seq", cs.StreamSeq, "error", errStats)
 	}
-	err = tx.Commit()
 	return
+}
+
+func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
+	conn, tx, err := cs.Prepare(db)
+	if err != nil {
+		if tx != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+		if conn != nil {
+			err = errors.Join(err, conn.Close())
+		}
+		return err
+	}
+	if tx != nil {
+		err = tx.Commit()
+	}
+	if conn != nil {
+		err = errors.Join(err, conn.Close())
+	}
+	return err
+}
+
+func (cs *ChangeSet) Undo(db *sql.DB) error {
+	cs.Changes = reverseChanges(cs.Changes)
+	slices.Reverse(cs.Changes)
+	ctx := ContextLocalDB(context.Background(), true)
+	return cs.propagate(ctx, db)
 }
 
 func (cs *ChangeSet) toItem() haconnect.HistoryItem {
@@ -255,6 +286,10 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 
 type fullIdentifyStrategy struct{}
 
+func (fullIdentifyStrategy) Name() string {
+	return "full"
+}
+
 func (fullIdentifyStrategy) ToSQL(change Change) (string, []any) {
 	var sql string
 	var args []any
@@ -296,6 +331,10 @@ func (fullIdentifyStrategy) ToSQL(change Change) (string, []any) {
 
 type pkIdentifyStrategy struct{}
 
+func (pkIdentifyStrategy) Name() string {
+	return "pk"
+}
+
 func (pkIdentifyStrategy) ToSQL(change Change) (string, []any) {
 	var sql string
 	var args []any
@@ -332,6 +371,10 @@ func (pkIdentifyStrategy) ToSQL(change Change) (string, []any) {
 
 type rowidIdentifyStrategy struct{}
 
+func (rowidIdentifyStrategy) Name() string {
+	return "rowid"
+}
+
 func (rowidIdentifyStrategy) ToSQL(change Change) (string, []any) {
 	var sql string
 	var args []any
@@ -365,6 +408,75 @@ func placeholders(n int) string {
 		fmt.Fprintf(&b, "?%d,", i+1)
 	}
 	return strings.TrimRight(b.String(), ",")
+}
+
+func changeSetFromProto(req *sqlv1.ChangeSetRequest) *ChangeSet {
+	cs := NewChangeSet(req.Node, req.ReplicationId)
+	switch req.Strategy {
+	case "pk":
+		cs.SetStrategy(pkIdentifyStrategy{})
+	case "rowid":
+		cs.SetStrategy(rowidIdentifyStrategy{})
+	case "full":
+		cs.SetStrategy(fullIdentifyStrategy{})
+	}
+	cs.Changes = make([]Change, len(req.Changes))
+	for i, item := range req.Changes {
+		cs.Changes[i] = Change{
+			Database:  item.Database,
+			Table:     item.Table,
+			Columns:   item.Columns,
+			PKColumns: item.PkColumns,
+			Operation: item.Operation,
+			OldRowID:  item.OldRowid,
+			NewRowID:  item.NewRowid,
+			OldValues: haconnect.FromAnypbList(item.OldValues),
+			NewValues: haconnect.FromAnypbList(item.NewValues),
+			Command:   item.Command,
+			Args:      haconnect.FromAnypbList(item.Args),
+			TsNs:      item.TsNs,
+		}
+	}
+	return cs
+}
+
+func changeSetToProto(cs *ChangeSet) (*sqlv1.ChangeSetRequest, error) {
+	req := sqlv1.ChangeSetRequest{
+		Node:          cs.Node,
+		ReplicationId: cs.Filename,
+		TimestampNs:   cs.Timestamp,
+		Strategy:      cs.strategy.Name(),
+	}
+	req.Changes = make([]*sqlv1.Change, len(cs.Changes))
+	for i, item := range cs.Changes {
+		change := sqlv1.Change{
+			Database:  item.Database,
+			Table:     item.Table,
+			Columns:   item.Columns,
+			PkColumns: item.PKColumns,
+			Operation: item.Operation,
+			OldRowid:  item.OldRowID,
+			NewRowid:  item.NewRowID,
+			Command:   item.Command,
+			TsNs:      item.TsNs,
+		}
+		var err error
+		change.OldValues, err = haconnect.ToAnypbList(item.OldValues)
+		if err != nil {
+			return nil, err
+		}
+		change.NewValues, err = haconnect.ToAnypbList(item.NewValues)
+		if err != nil {
+			return nil, err
+		}
+		change.Args, err = haconnect.ToAnypbList(item.Args)
+		if err != nil {
+			return nil, err
+		}
+		req.Changes[i] = &change
+	}
+
+	return &req, nil
 }
 
 type Change struct {

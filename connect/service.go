@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,10 +20,11 @@ import (
 
 type Service struct {
 	sqlv1connect.UnimplementedDatabaseServiceHandler
-	DBProvider         DBProvider
-	DSNList            DataSourceNamesFn
-	ReplicationIDList  ReplicationIDsFn
-	SQLExpectResultSet SQLExpectResultSetFn
+	DBProvider                    DBProvider
+	DSNList                       DataSourceNamesFn
+	ReplicationIDList             ReplicationIDsFn
+	SQLExpectResultSet            SQLExpectResultSetFn
+	TwoPhaseCommitWorkerConverter TwoPhaseCommitWorkerConverter
 }
 
 type HistoryItem struct {
@@ -72,6 +74,13 @@ type HADB interface {
 	UndoBySeq(context.Context, uint64, UndoFilter, map[string][]int64) error
 	UndoByTime(context.Context, time.Duration, UndoFilter, map[string][]int64) error
 }
+
+type TwoPhaseCommitWorker interface {
+	Prepare(*sql.DB) (*sql.Conn, *sql.Tx, error)
+	Undo(*sql.DB) error
+}
+
+type TwoPhaseCommitWorkerConverter func(*sqlv1.ChangeSetRequest) (TwoPhaseCommitWorker, error)
 
 type DBProvider func(id string) (HADB, bool)
 
@@ -632,6 +641,185 @@ func (s *Service) ReplicationIDs(ctx context.Context, req *connect.Request[sqlv1
 	return connect.NewResponse(&sqlv1.ReplicationIDsResponse{
 		ReplicationId: s.ReplicationIDList(),
 	}), nil
+}
+
+func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]) error {
+	var (
+		hadb HADB
+		db   *sql.DB
+		conn *sql.Conn
+		tx   *sql.Tx
+	)
+	defer func() {
+		if tx != nil {
+			tx.Rollback()
+		}
+		if conn != nil {
+			conn.Close()
+		}
+	}()
+	for {
+		req, err := stream.Receive()
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+
+		if req.Type == sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PING {
+			err := stream.Send(&sqlv1.ChangeSetResponse{})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		id := req.GetReplicationId()
+		if id == "" {
+			if list := s.ReplicationIDList(); len(list) == 1 {
+				id = list[0]
+			}
+		}
+		var ok bool
+		hadb, ok = s.DBProvider(id)
+		if !ok {
+			err := stream.Send(&sqlv1.ChangeSetResponse{
+				Error: fmt.Sprintf("database provider %q not found. Available databases: %v", req.GetReplicationId(), s.ReplicationIDList()),
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		newdb := hadb.DB()
+		if newdb == nil {
+			err := stream.Send(&sqlv1.ChangeSetResponse{
+				Error: fmt.Sprintf("database pool for %q not found", req.GetReplicationId()),
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if newdb != db {
+			if tx != nil {
+				tx.Rollback()
+				tx = nil
+			}
+			if conn != nil {
+				conn.Close()
+				conn = nil
+			}
+			db = newdb
+		}
+
+		worker, err := s.TwoPhaseCommitWorkerConverter(req)
+		if err != nil {
+			err := stream.Send(&sqlv1.ChangeSetResponse{
+				Error: err.Error(),
+			})
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		switch req.Type {
+		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE:
+			if tx != nil {
+				tx.Rollback()
+				tx = nil
+			}
+			if conn != nil {
+				conn.Close()
+				conn = nil
+			}
+			conn, tx, err = worker.Prepare(db)
+			if err != nil {
+				if tx != nil {
+					err = errors.Join(err, tx.Rollback())
+				}
+				if conn != nil {
+					err = errors.Join(err, conn.Close())
+				}
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: fmt.Sprintf("prepare: %s", err.Error()),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			err := stream.Send(&sqlv1.ChangeSetResponse{})
+			if err != nil {
+				return err
+			}
+		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT:
+			if tx == nil {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: "no active transaction",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			var msg string
+			err = tx.Commit()
+			if err != nil {
+				msg = err.Error()
+			} else {
+				tx = nil
+			}
+			if err := stream.Send(&sqlv1.ChangeSetResponse{Error: msg}); err != nil {
+				return err
+			}
+			continue
+		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_ABORT:
+			if tx == nil {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: "no active transaction",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			var msg string
+			err = tx.Rollback()
+			if err != nil {
+				msg = err.Error()
+			} else {
+				tx = nil
+			}
+			if err := stream.Send(&sqlv1.ChangeSetResponse{Error: msg}); err != nil {
+				return err
+			}
+			continue
+		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO:
+			if tx != nil {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: "transaction is active",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			err = worker.Undo(db)
+			if err != nil {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: fmt.Sprintf("undo: %s", err.Error()),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+		}
+	}
 }
 
 func query(ctx context.Context, ex execQuerier, query string, args ...any) *sqlv1.QueryResponse {

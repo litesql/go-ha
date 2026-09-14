@@ -254,6 +254,15 @@ func (cs *ChangeSet) propagate(ctx context.Context, db *sql.DB) (err error) {
 		}
 	}
 
+	// from twho-phase commit
+	if cs.Subject == "" {
+		_, err = tx.ExecContext(ctx, `REPLACE INTO ha_2pc_latest_undo(id, timestamp_ns) VALUES (1, ?)`, cs.Timestamp)
+		if err != nil {
+			slog.Error("failed to update ha_2pc_latest_undo table", "error", err)
+			return fmt.Errorf("update ha_2pc_latest_undo table: %w", err)
+		}
+	}
+
 	err = tx.Commit()
 	return
 }

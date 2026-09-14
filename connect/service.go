@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -644,6 +645,31 @@ func (s *Service) ReplicationIDs(ctx context.Context, req *connect.Request[sqlv1
 	}), nil
 }
 
+var (
+	changeSetUndoSchemaInit   = make(map[string]struct{})
+	muChangeSetUndoSchemaInit sync.Mutex
+)
+
+// used on two phase commit recovery process
+func createChangeSetUndoTable(id string, db *sql.DB) error {
+	muChangeSetUndoSchemaInit.Lock()
+	defer muChangeSetUndoSchemaInit.Unlock()
+
+	if _, ok := changeSetUndoSchemaInit[id]; ok {
+		return nil
+	}
+
+	_, err := db.ExecContext(context.Background(),
+		`CREATE TABLE IF NOT EXISTS ha_2pc_latest_undo(
+			id INTEGER PRIMARY KEY CHECK (id = 1),			
+			timestamp_ns INTEGER
+	)`)
+	if err != nil {
+		return fmt.Errorf("create changeset recovery table: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]) error {
 	var (
 		hadb HADB
@@ -704,6 +730,10 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			}
 			continue
 		}
+		if err := createChangeSetUndoTable(id, newdb); err != nil {
+			return err
+		}
+
 		if newdb != db {
 			if tx != nil {
 				tx.Rollback()
@@ -816,6 +846,36 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			if err != nil {
 				err := stream.Send(&sqlv1.ChangeSetResponse{
 					Error: fmt.Sprintf("undo: %s", err.Error()),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH:
+			if tx != nil {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: "transaction is active",
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			var latestUndoTimestamp int64
+			db.QueryRowContext(ctx, "SELECT timestamp_ns FROM ha_2pc_latest_undo WHERE id = 1").Scan(&latestUndoTimestamp)
+			if latestUndoTimestamp == req.TimestampNs {
+				// The latest undo operation has already been applied
+				err := stream.Send(&sqlv1.ChangeSetResponse{})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			err = worker.Undo(db)
+			if err != nil {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: fmt.Sprintf("undo after crash: %s", err.Error()),
 				})
 				if err != nil {
 					return err

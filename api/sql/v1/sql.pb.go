@@ -77,11 +77,12 @@ func (QueryType) EnumDescriptor() ([]byte, []int) {
 type CangeSetRequestType int32
 
 const (
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PING    CangeSetRequestType = 0
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE CangeSetRequestType = 1
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT  CangeSetRequestType = 2
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_ABORT   CangeSetRequestType = 3
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO    CangeSetRequestType = 4
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PING             CangeSetRequestType = 0
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE          CangeSetRequestType = 1
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT           CangeSetRequestType = 2
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_ABORT            CangeSetRequestType = 3
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO             CangeSetRequestType = 4
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH CangeSetRequestType = 5
 )
 
 // Enum value maps for CangeSetRequestType.
@@ -92,13 +93,15 @@ var (
 		2: "CHANGESET_REQUEST_TYPE_COMMIT",
 		3: "CHANGESET_REQUEST_TYPE_ABORT",
 		4: "CHANGESET_REQUEST_TYPE_UNDO",
+		5: "CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH",
 	}
 	CangeSetRequestType_value = map[string]int32{
-		"CHANGESET_REQUEST_TYPE_PING":    0,
-		"CHANGESET_REQUEST_TYPE_PREPARE": 1,
-		"CHANGESET_REQUEST_TYPE_COMMIT":  2,
-		"CHANGESET_REQUEST_TYPE_ABORT":   3,
-		"CHANGESET_REQUEST_TYPE_UNDO":    4,
+		"CHANGESET_REQUEST_TYPE_PING":             0,
+		"CHANGESET_REQUEST_TYPE_PREPARE":          1,
+		"CHANGESET_REQUEST_TYPE_COMMIT":           2,
+		"CHANGESET_REQUEST_TYPE_ABORT":            3,
+		"CHANGESET_REQUEST_TYPE_UNDO":             4,
+		"CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH": 5,
 	}
 )
 
@@ -1105,13 +1108,14 @@ const file_sql_v1_sql_proto_rawDesc = "" +
 	"\x16QUERY_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16QUERY_TYPE_EXEC_UPDATE\x10\x01\x12\x19\n" +
 	"\x15QUERY_TYPE_EXEC_QUERY\x10\x02\x12\x13\n" +
-	"\x0fQUERY_TYPE_PING\x10\x03*\xc0\x01\n" +
+	"\x0fQUERY_TYPE_PING\x10\x03*\xed\x01\n" +
 	"\x13CangeSetRequestType\x12\x1f\n" +
 	"\x1bCHANGESET_REQUEST_TYPE_PING\x10\x00\x12\"\n" +
 	"\x1eCHANGESET_REQUEST_TYPE_PREPARE\x10\x01\x12!\n" +
 	"\x1dCHANGESET_REQUEST_TYPE_COMMIT\x10\x02\x12 \n" +
 	"\x1cCHANGESET_REQUEST_TYPE_ABORT\x10\x03\x12\x1f\n" +
-	"\x1bCHANGESET_REQUEST_TYPE_UNDO\x10\x042\xd6\x03\n" +
+	"\x1bCHANGESET_REQUEST_TYPE_UNDO\x10\x04\x12+\n" +
+	"'CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH\x10\x052\xd6\x03\n" +
 	"\x0fDatabaseService\x12:\n" +
 	"\x05Query\x12\x14.sql.v1.QueryRequest\x1a\x15.sql.v1.QueryResponse\"\x00(\x010\x01\x12T\n" +
 	"\x0fDataSourceNames\x12\x1e.sql.v1.DataSourceNamesRequest\x1a\x1f.sql.v1.DataSourceNamesResponse\"\x00\x12A\n" +

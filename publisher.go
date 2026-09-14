@@ -340,13 +340,16 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 
 	var sequence uint64 = 1
 	if recoveryDB != nil {
-		recoveryDB.ExecContext(context.Background(), `
+		_, err = recoveryDB.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS ha_2pc_recovery(
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			changeset JSONB,
 			workers JSONB,
 			sequence INTEGER
 		)`)
+		if err != nil {
+			return nil, fmt.Errorf("create ha_2pc_recovery table: %w", err)
+		}
 		var recoveryChangeSet, recoveryWorkers string
 		recoveryDB.QueryRowContext(context.Background(), `SELECT changeset, workers, sequence FROM ha_2pc_recovery WHERE id = 1`).Scan(&recoveryChangeSet, &recoveryWorkers, &sequence)
 		if recoveryChangeSet != "" && recoveryWorkers != "" {
@@ -388,7 +391,7 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 				}
 			}()
 
-			req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO
+			req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH
 			// undo
 			for remote, stream := range streams {
 				err = stream.Send(req)
@@ -410,12 +413,11 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 					return nil, fmt.Errorf("update 2pc recovery table: %w", err)
 				}
 			}
-
-			wkJSON, _ := json.Marshal(workersKeys)
-			_, err = recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET workers = ? WHERE id = 1`, string(wkJSON))
-			if err != nil {
-				return nil, fmt.Errorf("update 2pc recovery table: %w", err)
-			}
+		}
+		wkJSON, _ := json.Marshal(workersKeys)
+		_, err = recoveryDB.ExecContext(context.Background(), `REPLACE INTO ha_2pc_recovery(id, changeset, workers, sequence) VALUES(1, '', ?, ?)`, string(wkJSON), sequence)
+		if err != nil {
+			return nil, fmt.Errorf("update 2pc recovery table: %w", err)
 		}
 	}
 

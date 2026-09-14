@@ -691,7 +691,7 @@ func (s *DBSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]hac
 			items = append(items, item)
 		}
 	}
-	return items, nil
+	return items, rows.Err()
 }
 
 func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration) ([]haconnect.HistoryItem, error) {
@@ -723,7 +723,7 @@ func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration
 			items = append(items, item)
 		}
 	}
-	return items, nil
+	return items, rows.Err()
 }
 
 func (s *DBSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filter haconnect.UndoFilter, filterEntities map[string][]int64) error {
@@ -805,6 +805,9 @@ func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, ta
 			}
 		}
 		undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
+	}
+	if rows.Err() != nil {
+		return err
 	}
 	if filter == haconnect.UndoFilterEntity {
 		undoChangeSet.Changes = filterEntityChanges(undoChangeSet.Changes, tableIds)

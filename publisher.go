@@ -326,42 +326,104 @@ func (p *DBPublisher) cleaner() {
 }
 
 type TwoPhaseCommitPublisher struct {
-	sequence uint64
-	timeout  time.Duration
-	workers  []sqlv1.DatabaseServiceClient
+	sequence   uint64
+	timeout    time.Duration
+	workers    map[string]sqlv1.DatabaseServiceClient
+	recoveryDB *sql.DB
 }
 
-func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Duration) (*TwoPhaseCommitPublisher, error) {
-	var workers []sqlv1.DatabaseServiceClient
-	for remote, token := range workersKeys {
-		u, err := url.Parse(remote)
-		if err != nil {
-			slog.Error("parse url", "error", err)
-			return nil, err
-		}
-
-		var dialOpts []grpc.DialOption
-
-		if strings.HasPrefix(remote, "http://") {
-			dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		} else {
-			dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
-		}
-		if token != "" {
-			dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(grpcCredentials{token: token}))
-		}
-
-		cc, err := grpc.NewClient(u.Host, dialOpts...)
-		if err != nil {
-			slog.Error("grpc connect", "error", err)
-			return nil, err
-		}
-		workers = append(workers, sqlv1.NewDatabaseServiceClient(cc))
+func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Duration, recoveryDB *sql.DB) (*TwoPhaseCommitPublisher, error) {
+	workers, err := connectTwoPhaseCommitWorkers(workersKeys)
+	if err != nil {
+		return nil, err
 	}
+
+	var sequence uint64 = 1
+	if recoveryDB != nil {
+		recoveryDB.ExecContext(context.Background(), `
+		CREATE TABLE IF NOT EXISTS ha_2pc_recovery(
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			changeset JSONB,
+			workers JSONB,
+			sequence INTEGER
+		)`)
+		var recoveryChangeSet, recoveryWorkers string
+		recoveryDB.QueryRowContext(context.Background(), `SELECT changeset, workers, sequence FROM ha_2pc_recovery WHERE id = 1`).Scan(&recoveryChangeSet, &recoveryWorkers, &sequence)
+		if recoveryChangeSet != "" && recoveryWorkers != "" {
+			var (
+				cs ChangeSet
+				wk map[string]string
+			)
+			err := json.Unmarshal([]byte(recoveryChangeSet), &cs)
+			if err != nil {
+				return nil, fmt.Errorf("unmarshal changest: %w", err)
+			}
+			err = json.Unmarshal([]byte(recoveryWorkers), &wk)
+			if err != nil {
+				return nil, fmt.Errorf("unmarshal workers: %w", err)
+			}
+			workers, err := connectTwoPhaseCommitWorkers(wk)
+			if err != nil {
+				return nil, fmt.Errorf("connect workers to start recovery process: %w", err)
+			}
+
+			req, err := changeSetToProto(&cs)
+			if err != nil {
+				return nil, err
+			}
+
+			streams := make(map[string]grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse])
+			// connect
+			for remote, w := range workers {
+				stream, err := w.ChangeSet(context.Background())
+				if err != nil {
+					return nil, err
+				}
+				streams[remote] = stream
+			}
+
+			defer func() {
+				for _, stream := range streams {
+					stream.CloseSend()
+				}
+			}()
+
+			req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO
+			// undo
+			for remote, stream := range streams {
+				err = stream.Send(req)
+				if err != nil {
+					return nil, err
+				}
+
+				resp, err := stream.Recv()
+				if err != nil {
+					return nil, err
+				}
+				if resp.Error != "" {
+					return nil, fmt.Errorf("worker recovery: %s", resp.Error)
+				}
+				delete(wk, remote)
+				wkJSON, _ := json.Marshal(wk)
+				_, err = recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET workers = ? WHERE id = 1`, string(wkJSON))
+				if err != nil {
+					return nil, fmt.Errorf("update 2pc recovery table: %w", err)
+				}
+			}
+
+			wkJSON, _ := json.Marshal(workersKeys)
+			_, err = recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET workers = ? WHERE id = 1`, string(wkJSON))
+			if err != nil {
+				return nil, fmt.Errorf("update 2pc recovery table: %w", err)
+			}
+		}
+	}
+
 	return &TwoPhaseCommitPublisher{
-		sequence: 1,
-		timeout:  timeout,
-		workers:  workers,
+		sequence:   sequence,
+		timeout:    timeout,
+		workers:    workers,
+		recoveryDB: recoveryDB,
 	}, nil
 }
 
@@ -430,6 +492,15 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 			}
 		}
 	}()
+
+	if p.recoveryDB != nil {
+		csJSON, _ := json.Marshal(cs)
+		_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = ? WHERE id = 1`, csJSON)
+		if err != nil {
+			return fmt.Errorf("update ha_2pc_recovery table: %w", err)
+		}
+	}
+
 	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
 	for _, stream := range streams {
 		err = stream.Send(req)
@@ -448,11 +519,47 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 		commitedStreams = append(commitedStreams, stream)
 	}
 	p.sequence++
+	if p.recoveryDB != nil {
+		_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = '', sequence = ? WHERE id = 1`, p.sequence)
+		if err != nil {
+			return fmt.Errorf("update ha_2pc_recovery table: %w", err)
+		}
+	}
 	return nil
 }
 
 func (p *TwoPhaseCommitPublisher) Sequence() uint64 {
 	return p.sequence
+}
+
+func connectTwoPhaseCommitWorkers(workersKeys map[string]string) (map[string]sqlv1.DatabaseServiceClient, error) {
+	workers := make(map[string]sqlv1.DatabaseServiceClient)
+	for remote, token := range workersKeys {
+		u, err := url.Parse(remote)
+		if err != nil {
+			slog.Error("parse url", "error", err)
+			return nil, err
+		}
+
+		var dialOpts []grpc.DialOption
+
+		if strings.HasPrefix(remote, "http://") {
+			dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		} else {
+			dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
+		}
+		if token != "" {
+			dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(grpcCredentials{token: token}))
+		}
+
+		cc, err := grpc.NewClient(u.Host, dialOpts...)
+		if err != nil {
+			slog.Error("grpc connect", "error", err)
+			return nil, err
+		}
+		workers[remote] = sqlv1.NewDatabaseServiceClient(cc)
+	}
+	return workers, nil
 }
 
 type grpcCredentials struct {

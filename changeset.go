@@ -167,6 +167,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		if tx != nil {
 			err = errors.Join(err, tx.Rollback())
 		}
+		err = errors.Join(err, cs.AfterCommit(conn, err))
 		if conn != nil {
 			err = errors.Join(err, conn.Close())
 		}
@@ -175,6 +176,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	if tx != nil {
 		err = tx.Commit()
 	}
+	err = errors.Join(err, cs.AfterCommit(conn, err))
 	if conn != nil {
 		err = errors.Join(err, conn.Close())
 	}

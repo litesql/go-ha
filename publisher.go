@@ -430,6 +430,9 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 }
 
 func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
+	if len(cs.Changes) == 0 {
+		return nil
+	}
 	req, err := changeSetToProto(cs)
 	if err != nil {
 		return err

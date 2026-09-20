@@ -7,10 +7,10 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/nats-io/graft v0.0.0-20260325174230-f9e6710ae36e
-	github.com/nats-io/nats-server/v2 v2.14.6
-	github.com/nats-io/nats.go v1.53.1
+	github.com/nats-io/nats-server/v2 v2.15.0
+	github.com/nats-io/nats.go v1.54.0
 	github.com/rqlite/sql v0.0.0-20260224021119-1b2524a41372
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -28,5 +28,5 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260911204522-f61a6ca850bd // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260918162117-cecb64721679 // indirect
 )

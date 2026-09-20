@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"slices"
 	"strconv"
 	"sync"
@@ -32,21 +31,7 @@ var (
 	muConnectors      sync.RWMutex
 )
 
-type ConnHooksConfig struct {
-	NodeName             string
-	ReplicationID        string
-	DisableDDLSync       bool
-	Publisher            Publisher
-	CDC                  CDCPublisher
-	TxSeqTrackerProvider TxSeqTrackerProvider
-	Leader               LeaderProvider
-	GrpcTimeout          time.Duration
-	GrpcToken            string
-	GrpcInsecure         bool
-	QueryRouter          *regexp.Regexp
-}
-
-type ConnHooksFactory func(cfg ConnHooksConfig) ConnHooksProvider
+type ConnHooksFactory func() ConnHooksProvider
 
 type ConnHooksProvider interface {
 	RegisterHooks(driver.Conn, *Connector) (driver.Conn, error)

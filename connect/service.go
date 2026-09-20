@@ -665,7 +665,7 @@ func createChangeSetUndoTable(id string, db *sql.DB) error {
 			timestamp_ns INTEGER
 	)`)
 	if err != nil {
-		return fmt.Errorf("create changeset recovery table: %w", err)
+		return fmt.Errorf("create changeset recovery table for %q: %w", id, err)
 	}
 	return nil
 }

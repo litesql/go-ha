@@ -229,21 +229,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		c.subscriber = localDBSub
 	}
 
-	c.connHooksProvider = connHooksFactory(ConnHooksConfig{
-		NodeName:       c.name,
-		ReplicationID:  c.replicationID,
-		DisableDDLSync: c.disableDDLSync,
-		Publisher:      c.publisher,
-		CDC:            c.cdcPublisher,
-		TxSeqTrackerProvider: func() TxSeqTracker {
-			return c.subscriber
-		},
-		Leader:       c.leaderProvider,
-		GrpcTimeout:  c.grpcTimeout,
-		GrpcToken:    c.grpcToken,
-		GrpcInsecure: c.grpcInsecure,
-		QueryRouter:  c.queryRouter,
-	})
+	c.connHooksProvider = connHooksFactory()
 
 	if localDBPub != nil && localDBSub != nil {
 		tempDB := sql.OpenDB(&c)
@@ -452,6 +438,30 @@ func (c *Connector) Backup(ctx context.Context, writer io.Writer) error {
 
 func (c *Connector) NodeName() string {
 	return c.name
+}
+
+func (c *Connector) ReplicationID() string {
+	return c.replicationID
+}
+
+func (c *Connector) GrpcTimeout() time.Duration {
+	return c.grpcTimeout
+}
+
+func (c *Connector) GrpcToken() string {
+	return c.grpcToken
+}
+
+func (c *Connector) GrpcInsecure() bool {
+	return c.grpcInsecure
+}
+
+func (c *Connector) DisableDDLSync() bool {
+	return c.disableDDLSync
+}
+
+func (c *Connector) QueryRouter() *regexp.Regexp {
+	return c.queryRouter
 }
 
 func (c *Connector) Publisher() Publisher {

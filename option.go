@@ -181,6 +181,12 @@ func WithAutoStart(enabled bool) Option {
 	}
 }
 
+func WithForcePublishBeforeStart(enabled bool) Option {
+	return func(c *Connector) {
+		c.forcePublishBeforeStart = enabled
+	}
+}
+
 func WithClusterSize(size int) Option {
 	return func(c *Connector) {
 		c.clusterSize = size
@@ -433,6 +439,12 @@ func NameToOptions(name string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid autoStart: %w", err)
 			}
 			opts = append(opts, WithAutoStart(autoStart))
+		case "forcePublishBeforeStart":
+			forcePublishBeforeStart, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid forcePublishBeforeStart: %w", err)
+			}
+			opts = append(opts, WithForcePublishBeforeStart(forcePublishBeforeStart))
 		default:
 			for _, v := range values[k] {
 				dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, v))

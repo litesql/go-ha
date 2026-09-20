@@ -47,6 +47,7 @@ type Connector struct {
 	replicationID           string
 	rowIdentify             RowIdentify
 	autoStart               bool
+	forcePublishBeforeStart bool
 	clusterSize             int
 	waitFor                 chan struct{}
 
@@ -309,8 +310,10 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 				c.snapshotter.Start()
 			}
 		} else {
-			c.publisher = &delayedStartPublisher{
-				pub: c.publisher,
+			if !c.forcePublishBeforeStart {
+				c.publisher = &delayedStartPublisher{
+					pub: c.publisher,
+				}
 			}
 			go func() {
 				<-c.waitFor

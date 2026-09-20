@@ -156,7 +156,8 @@ go-ha provides several driver implementations:
 |------------------------|-----------------------------------------------------------------------------|-----------------|
 | asyncPublisher         | Enables asynchronous publishing of replication events.                      | false           |
 | asyncPublisherOutboxDir| Directory to store outbox files for asynchronous publishing.                |                 |
-| autoStart              | Automatically starts subscriber and snapshotter on initialization.         | true            |
+| autoStart              | Automatically starts publisher, subscriber and snapshotter on initialization.         | true            |
+| forcePublishBeforeStart | Force publish data to stream before complete the start proccess            | false |
 | replicationID          | Unique ID for this replication instance.                                    | [database filename] |
 | deliverPolicy          | Delivery policy for replication events (`all`, `last`, etc.).              | all             |
 | disableSubscriber      | Disables the replication subscriber.                                        | false           |

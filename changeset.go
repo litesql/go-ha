@@ -77,22 +77,26 @@ func (cs *ChangeSet) Send(pub Publisher) error {
 	return pub.Publish(cs)
 }
 
-func (cs *ChangeSet) Prepare(db *sql.DB) (conn *sql.Conn, tx *sql.Tx, err error) {
+func (cs *ChangeSet) Prepare(db *sql.DB) (conn *haconnect.ConnHooksEnabler, tx *sql.Tx, err error) {
 	ctx := ContextLocalDB(context.Background(), true)
-	conn, err = db.Conn(ctx)
+	var sqlConn *sql.Conn
+	sqlConn, err = db.Conn(ctx)
 	if err != nil {
 		return
 	}
+	conn = &haconnect.ConnHooksEnabler{
+		SqlConn:         sqlConn,
+		ConnHooksEnable: cs.connProvider.EnableHooks,
+	}
 
-	err = cs.connProvider.DisableHooks(conn)
+	err = cs.connProvider.DisableHooks(sqlConn)
 	if err != nil {
 		err = errors.Join(err, conn.Close())
 		return
 	}
-	defer cs.connProvider.EnableHooks(conn)
 	if cs.interceptor != nil {
 		var skip bool
-		skip, err = cs.interceptor.BeforeApply(cs, conn)
+		skip, err = cs.interceptor.BeforeApply(cs, sqlConn)
 		if err != nil {
 			return
 		}
@@ -104,7 +108,7 @@ func (cs *ChangeSet) Prepare(db *sql.DB) (conn *sql.Conn, tx *sql.Tx, err error)
 		return
 	}
 
-	tx, err = conn.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = sqlConn.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return
 	}
@@ -167,7 +171,7 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 		if tx != nil {
 			err = errors.Join(err, tx.Rollback())
 		}
-		err = errors.Join(err, cs.AfterCommit(conn, err))
+		err = errors.Join(err, cs.AfterCommit(conn.SqlConn, err))
 		if conn != nil {
 			err = errors.Join(err, conn.Close())
 		}
@@ -176,18 +180,27 @@ func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
 	if tx != nil {
 		err = tx.Commit()
 	}
-	err = errors.Join(err, cs.AfterCommit(conn, err))
+	err = errors.Join(err, cs.AfterCommit(conn.SqlConn, err))
 	if conn != nil {
 		err = errors.Join(err, conn.Close())
 	}
 	return err
 }
 
-func (cs *ChangeSet) Undo(db *sql.DB) error {
+func (cs *ChangeSet) UndoLocal(db *sql.DB) error {
 	cs.Changes = reverseChanges(cs.Changes)
 	slices.Reverse(cs.Changes)
 	ctx := ContextLocalDB(context.Background(), true)
-	return cs.propagate(ctx, db)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := cs.connProvider.DisableHooks(conn); err != nil {
+		return err
+	}
+	defer cs.connProvider.EnableHooks(conn)
+	return cs.propagate(ctx, conn)
 }
 
 func (cs *ChangeSet) toItem() haconnect.HistoryItem {
@@ -212,13 +225,7 @@ func (cs *ChangeSet) toItem() haconnect.HistoryItem {
 	}
 }
 
-func (cs *ChangeSet) propagate(ctx context.Context, db *sql.DB) (err error) {
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
+func (cs *ChangeSet) propagate(ctx context.Context, conn *sql.Conn) (err error) {
 	if cs.interceptor != nil {
 		defer func() {
 			err = cs.interceptor.AfterApply(cs, conn, err)

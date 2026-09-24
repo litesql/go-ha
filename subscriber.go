@@ -519,13 +519,22 @@ func (s *NATSSubscriber) undo(ctx context.Context, cc jetstream.ConsumerConfig, 
 			}
 			undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
 			slices.Reverse(undoChangeSet.Changes)
-			return undoChangeSet.propagate(ctx, s.db)
+			return propagateChangeSet(ctx, undoChangeSet, s.db)
 		case <-time.After(30 * time.Second):
 			if !hasData {
 				return fmt.Errorf("timed out: no history data available in stream for undo")
 			}
 		}
 	}
+}
+
+func propagateChangeSet(ctx context.Context, cs ChangeSet, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return cs.propagate(ctx, conn)
 }
 
 func (s *NATSSubscriber) handler(msg jetstream.Msg) {
@@ -814,7 +823,7 @@ func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, ta
 	}
 	undoChangeSet.Changes = reverseChanges(undoChangeSet.Changes)
 	slices.Reverse(undoChangeSet.Changes)
-	return undoChangeSet.propagate(ctx, s.db)
+	return propagateChangeSet(ctx, undoChangeSet, s.db)
 }
 
 func filterEntityChanges(changes []Change, tableIds map[string][]int64) []Change {

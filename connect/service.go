@@ -77,12 +77,21 @@ type HADB interface {
 }
 
 type TwoPhaseCommitWorker interface {
-	Prepare(*sql.DB) (*sql.Conn, *sql.Tx, error)
+	Prepare(*sql.DB) (*ConnHooksEnabler, *sql.Tx, error)
 	AfterCommit(conn *sql.Conn, err error) error
-	Undo(*sql.DB) error
+	UndoLocal(*sql.DB) error
 }
 
 type TwoPhaseCommitWorkerConverter func(*sqlv1.ChangeSetRequest) (TwoPhaseCommitWorker, error)
+
+type ConnHooksEnabler struct {
+	SqlConn         *sql.Conn
+	ConnHooksEnable func(*sql.Conn) error
+}
+
+func (c *ConnHooksEnabler) Close() error {
+	return errors.Join(c.ConnHooksEnable(c.SqlConn), c.SqlConn.Close())
+}
 
 type DBProvider func(id string) (HADB, bool)
 
@@ -674,7 +683,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 	var (
 		hadb HADB
 		db   *sql.DB
-		conn *sql.Conn
+		conn *ConnHooksEnabler
 		tx   *sql.Tx
 	)
 	defer func() {
@@ -771,9 +780,11 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			if err != nil {
 				if tx != nil {
 					err = errors.Join(err, tx.Rollback())
+					tx = nil
 				}
 				if conn != nil {
 					err = errors.Join(err, conn.Close())
+					conn = nil
 				}
 				err := stream.Send(&sqlv1.ChangeSetResponse{
 					Error: fmt.Sprintf("prepare: %s", err.Error()),
@@ -799,13 +810,15 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			}
 
 			err = tx.Commit()
-			if err == nil {
-				tx = nil
-			}
+			tx = nil
 			var msg string
-			err = errors.Join(err, worker.AfterCommit(conn, err))
+			err = errors.Join(err, worker.AfterCommit(conn.SqlConn, err))
 			if err != nil {
 				msg = err.Error()
+			}
+			if conn != nil {
+				err = errors.Join(err, conn.Close())
+				conn = nil
 			}
 			if err := stream.Send(&sqlv1.ChangeSetResponse{Error: msg}); err != nil {
 				return err
@@ -821,12 +834,16 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				}
 				continue
 			}
-			var msg string
+
 			err = tx.Rollback()
+			tx = nil
+			if conn != nil {
+				err = errors.Join(err, conn.Close())
+				conn = nil
+			}
+			var msg string
 			if err != nil {
 				msg = err.Error()
-			} else {
-				tx = nil
 			}
 			if err := stream.Send(&sqlv1.ChangeSetResponse{Error: msg}); err != nil {
 				return err
@@ -842,7 +859,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				}
 				continue
 			}
-			err = worker.Undo(db)
+			err = worker.UndoLocal(db)
 			if err != nil {
 				err := stream.Send(&sqlv1.ChangeSetResponse{
 					Error: fmt.Sprintf("undo: %s", err.Error()),
@@ -872,7 +889,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				}
 				continue
 			}
-			err = worker.Undo(db)
+			err = worker.UndoLocal(db)
 			if err != nil {
 				err := stream.Send(&sqlv1.ChangeSetResponse{
 					Error: fmt.Sprintf("undo after crash: %s", err.Error()),

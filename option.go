@@ -241,7 +241,7 @@ func WithQueryRouter(re *regexp.Regexp) Option {
 	}
 }
 
-func NameToOptions(name string) (string, []Option, error) {
+func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 	dsn := name
 	var queryParams string
 	if i := strings.Index(name, "?"); i != -1 {
@@ -267,6 +267,10 @@ func NameToOptions(name string) (string, []Option, error) {
 		opts       []Option
 		dsnOptions []string
 		natsConfig EmbeddedNatsConfig
+
+		twoPhaseCommitTimeout      = 60 * time.Second
+		twoPhaseCommitPeers        = make(map[string]string)
+		twoPhaseCommitRecoveryPath string
 	)
 	for _, k := range keys {
 		v := values[k]
@@ -445,6 +449,19 @@ func NameToOptions(name string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid forcePublishBeforeStart: %w", err)
 			}
 			opts = append(opts, WithForcePublishBeforeStart(forcePublishBeforeStart))
+		case "2pcPeers":
+			for _, peer := range strings.Split(value, ",") {
+				//host(token),host2(token2)
+				host, token, _ := strings.Cut(peer, "(")
+				twoPhaseCommitPeers[host] = strings.TrimSuffix(token, ")")
+			}
+		case "2pcTimeout":
+			twoPhaseCommitTimeout, err = time.ParseDuration(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid 2pcTimeout: %w", err)
+			}
+		case "2pcRecoveryPath":
+			twoPhaseCommitRecoveryPath = value
 		default:
 			for _, v := range values[k] {
 				dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, v))
@@ -454,6 +471,21 @@ func NameToOptions(name string) (string, []Option, error) {
 
 	if !natsConfig.empty() {
 		opts = append(opts, WithEmbeddedNatsConfig(&natsConfig))
+	}
+
+	if len(twoPhaseCommitPeers) > 0 {
+		var recoveryDB *sql.DB
+		if twoPhaseCommitRecoveryPath != "" {
+			recoveryDB, err = sql.Open(baseDriver, fmt.Sprintf("file:%s", twoPhaseCommitRecoveryPath))
+			if err != nil {
+				return "", nil, err
+			}
+		}
+		pub, err := NewTwoPhaseCommitPublisher(twoPhaseCommitPeers, twoPhaseCommitTimeout, recoveryDB)
+		if err != nil {
+			return "", nil, err
+		}
+		opts = append(opts, WithReplicationPublisher(pub))
 	}
 
 	// Sort DSN options to ensure deterministic order

@@ -60,7 +60,7 @@ const (
 )
 
 func LookupConnector(dsn string) (*Connector, bool) {
-	key, _, _ := NameToOptions(dsn)
+	key, _, _ := NameToOptions(dsn, "")
 	muConnectors.RLock()
 	defer muConnectors.RUnlock()
 	conn, ok := connectors[key]

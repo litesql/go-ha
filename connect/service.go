@@ -74,6 +74,7 @@ type HADB interface {
 	HistoryByTime(context.Context, time.Duration) ([]HistoryItem, error)
 	UndoBySeq(context.Context, uint64, UndoFilter, map[string][]int64) error
 	UndoByTime(context.Context, time.Duration, UndoFilter, map[string][]int64) error
+	Mutex() *sync.Mutex
 	DisableHooks(*sql.Conn) error
 	EnableHooks(*sql.Conn) error
 }
@@ -695,10 +696,11 @@ func createChangeSetUndoTable(id string, hadb HADB) error {
 
 func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]) error {
 	var (
-		hadb HADB
-		db   *sql.DB
-		conn *ConnHooksEnabler
-		tx   *sql.Tx
+		replicationID string
+		hadb          HADB
+		db            *sql.DB
+		conn          *ConnHooksEnabler
+		tx            *sql.Tx
 	)
 	defer func() {
 		if tx != nil {
@@ -725,49 +727,39 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			continue
 		}
 
-		id := req.GetReplicationId()
-		if id == "" {
-			if list := s.ReplicationIDList(); len(list) == 1 {
-				id = list[0]
+		if hadb == nil {
+			replicationID = req.GetReplicationId()
+			if replicationID == "" {
+				if list := s.ReplicationIDList(); len(list) == 1 {
+					replicationID = list[0]
+				}
 			}
-		}
-		var ok bool
-		hadb, ok = s.DBProvider(id)
-		if !ok {
-			err := stream.Send(&sqlv1.ChangeSetResponse{
-				Error: fmt.Sprintf("database provider %q not found. Available databases: %v", req.GetReplicationId(), s.ReplicationIDList()),
-			})
-			if err != nil {
+			var ok bool
+			hadb, ok = s.DBProvider(replicationID)
+			if !ok {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: fmt.Sprintf("database provider %q not found. Available databases: %v", req.GetReplicationId(), s.ReplicationIDList()),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			db = hadb.DB()
+			if db == nil {
+				err := stream.Send(&sqlv1.ChangeSetResponse{
+					Error: fmt.Sprintf("database pool for %q not found", req.GetReplicationId()),
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			hadb.Mutex().Lock()
+			defer hadb.Mutex().Unlock()
+			if err := createChangeSetUndoTable(replicationID, hadb); err != nil {
 				return err
 			}
-			continue
-		}
-
-		newdb := hadb.DB()
-		if newdb == nil {
-			err := stream.Send(&sqlv1.ChangeSetResponse{
-				Error: fmt.Sprintf("database pool for %q not found", req.GetReplicationId()),
-			})
-			if err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := createChangeSetUndoTable(id, hadb); err != nil {
-			return err
-		}
-
-		if newdb != db {
-			if tx != nil {
-				tx.Rollback()
-				tx = nil
-			}
-			if conn != nil {
-				conn.Close()
-				conn = nil
-			}
-			db = newdb
 		}
 
 		worker, err := s.TwoPhaseCommitWorkerConverter(req)

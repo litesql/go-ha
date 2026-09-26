@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -26,6 +27,7 @@ import (
 )
 
 type Connector struct {
+	mu                      *sync.Mutex
 	driver                  driver.Driver
 	connHooksProvider       ConnHooksProvider
 	backupFn                BackupFn
@@ -84,6 +86,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	defer muConnectors.Unlock()
 
 	c := Connector{
+		mu:                &sync.Mutex{},
 		clusterSize:       1,
 		dsn:               dsn,
 		driver:            drv,
@@ -591,6 +594,10 @@ func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 		return nil, err
 	}
 	return c.connHooksProvider.RegisterHooks(conn, c)
+}
+
+func (c *Connector) Mutex() *sync.Mutex {
+	return c.mu
 }
 
 func (c *Connector) DisableHooks(conn *sql.Conn) error {

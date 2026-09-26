@@ -593,6 +593,14 @@ func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 	return c.connHooksProvider.RegisterHooks(conn, c)
 }
 
+func (c *Connector) DisableHooks(conn *sql.Conn) error {
+	return c.connHooksProvider.DisableHooks(conn)
+}
+
+func (c *Connector) EnableHooks(conn *sql.Conn) error {
+	return c.connHooksProvider.EnableHooks(conn)
+}
+
 type noHooksConnector struct {
 	driver driver.Driver
 	dsn    string

@@ -74,6 +74,8 @@ type HADB interface {
 	HistoryByTime(context.Context, time.Duration) ([]HistoryItem, error)
 	UndoBySeq(context.Context, uint64, UndoFilter, map[string][]int64) error
 	UndoByTime(context.Context, time.Duration, UndoFilter, map[string][]int64) error
+	DisableHooks(*sql.Conn) error
+	EnableHooks(*sql.Conn) error
 }
 
 type TwoPhaseCommitWorker interface {
@@ -660,7 +662,7 @@ var (
 )
 
 // used on two phase commit recovery process
-func createChangeSetUndoTable(id string, db *sql.DB) error {
+func createChangeSetUndoTable(id string, hadb HADB) error {
 	muChangeSetUndoSchemaInit.Lock()
 	defer muChangeSetUndoSchemaInit.Unlock()
 
@@ -668,7 +670,19 @@ func createChangeSetUndoTable(id string, db *sql.DB) error {
 		return nil
 	}
 
-	_, err := db.ExecContext(context.Background(),
+	conn, err := hadb.DB().Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get connection for changeset undo table: %w", err)
+	}
+	defer conn.Close()
+
+	err = hadb.DisableHooks(conn)
+	if err != nil {
+		return fmt.Errorf("failed to disable hooks for changeset undo table: %w", err)
+	}
+	defer hadb.EnableHooks(conn)
+
+	_, err = conn.ExecContext(context.Background(),
 		`CREATE TABLE IF NOT EXISTS ha_2pc_latest_undo(
 			id INTEGER PRIMARY KEY CHECK (id = 1),			
 			timestamp_ns INTEGER
@@ -739,7 +753,8 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			}
 			continue
 		}
-		if err := createChangeSetUndoTable(id, newdb); err != nil {
+
+		if err := createChangeSetUndoTable(id, hadb); err != nil {
 			return err
 		}
 

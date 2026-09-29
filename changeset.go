@@ -443,6 +443,7 @@ func changeSetFromProto(req *sqlv1.ChangeSetRequest) *ChangeSet {
 		cs.SetStrategy(fullIdentifyStrategy{})
 	}
 	cs.Timestamp = req.TimestampNs
+	cs.TransactionID = req.TransactionId
 	cs.Changes = make([]Change, len(req.Changes))
 	for i, item := range req.Changes {
 		cs.Changes[i] = Change{

@@ -20,20 +20,20 @@ const controlTableName = "ha_stats"
 type ChangeSet struct {
 	interceptor   ChangeSetInterceptor
 	connProvider  ConnHooksProvider
-	strategy      sqlStrategy
-	Node          string   `json:"node"`
-	ProcessID     int64    `json:"process_id"`
-	Filename      string   `json:"filename"`
-	Changes       []Change `json:"changes"`
-	Timestamp     int64    `json:"timestamp_ns"`
-	TransactionID string   `json:"transaction_id,omitempty"`
-	Subject       string   `json:"-"`
-	StreamSeq     uint64   `json:"-"`
+	strategy      sqlStrategy `json:"strategy"`
+	Node          string      `json:"node"`
+	ProcessID     int64       `json:"process_id"`
+	Filename      string      `json:"filename"`
+	Changes       []Change    `json:"changes"`
+	Timestamp     int64       `json:"timestamp_ns"`
+	TransactionID string      `json:"transaction_id,omitempty"`
+	Subject       string      `json:"-"`
+	StreamSeq     uint64      `json:"-"`
 }
 
 type sqlStrategy interface {
+	fmt.Stringer
 	ToSQL(Change) (string, []any)
-	Name() string
 }
 
 var defaultStrategy = pkIdentifyStrategy{}
@@ -308,7 +308,7 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 
 type fullIdentifyStrategy struct{}
 
-func (fullIdentifyStrategy) Name() string {
+func (fullIdentifyStrategy) String() string {
 	return "full"
 }
 
@@ -353,7 +353,7 @@ func (fullIdentifyStrategy) ToSQL(change Change) (string, []any) {
 
 type pkIdentifyStrategy struct{}
 
-func (pkIdentifyStrategy) Name() string {
+func (pkIdentifyStrategy) String() string {
 	return "pk"
 }
 
@@ -393,7 +393,7 @@ func (pkIdentifyStrategy) ToSQL(change Change) (string, []any) {
 
 type rowidIdentifyStrategy struct{}
 
-func (rowidIdentifyStrategy) Name() string {
+func (rowidIdentifyStrategy) String() string {
 	return "rowid"
 }
 
@@ -467,7 +467,7 @@ func changeSetToProto(cs *ChangeSet) (*sqlv1.ChangeSetRequest, error) {
 		Node:          cs.Node,
 		ReplicationId: cs.Filename,
 		TimestampNs:   cs.Timestamp,
-		Strategy:      cs.strategy.Name(),
+		Strategy:      cs.strategy.String(),
 		TransactionId: cs.TransactionID,
 	}
 	req.Changes = make([]*sqlv1.Change, len(cs.Changes))

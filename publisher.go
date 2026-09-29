@@ -364,6 +364,7 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 			if err != nil {
 				return nil, fmt.Errorf("unmarshal changest: %w", err)
 			}
+			cs.SetStrategy(defaultStrategy)
 			err = json.Unmarshal([]byte(recoveryWorkers), &wk)
 			if err != nil {
 				return nil, fmt.Errorf("unmarshal workers: %w", err)

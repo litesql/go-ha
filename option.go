@@ -268,9 +268,8 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 		dsnOptions []string
 		natsConfig EmbeddedNatsConfig
 
-		twoPhaseCommitTimeout      = 60 * time.Second
-		twoPhaseCommitPeers        = make(map[string]string)
-		twoPhaseCommitRecoveryPath string
+		twoPhaseCommitTimeout = 60 * time.Second
+		twoPhaseCommitPeers   = make(map[string]string)
 	)
 	for _, k := range keys {
 		v := values[k]
@@ -460,8 +459,6 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 			if err != nil {
 				return "", nil, fmt.Errorf("invalid 2pcTimeout: %w", err)
 			}
-		case "2pcRecoveryPath":
-			twoPhaseCommitRecoveryPath = value
 		default:
 			for _, v := range values[k] {
 				dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, v))
@@ -474,15 +471,7 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 	}
 
 	if len(twoPhaseCommitPeers) > 0 {
-		if twoPhaseCommitRecoveryPath == "" {
-			return "", nil, fmt.Errorf("2pcRecoveryPath is required when 2pcPeers is configured")
-		}
-		var recoveryDB *sql.DB
-		recoveryDB, err = sql.Open(baseDriver, fmt.Sprintf("file:%s", twoPhaseCommitRecoveryPath))
-		if err != nil {
-			return "", nil, err
-		}
-		pub, err := NewTwoPhaseCommitPublisher(twoPhaseCommitPeers, twoPhaseCommitTimeout, recoveryDB)
+		pub, err := NewTwoPhaseCommitPublisher(twoPhaseCommitPeers, twoPhaseCommitTimeout)
 		if err != nil {
 			return "", nil, err
 		}

@@ -184,7 +184,6 @@ go-ha provides several driver implementations:
 | streamMaxAge           | Maximum age of messages in replication stream.                              |                 |
 | 2pcPeers      | Comma-separated list of peer addresses participating in distributed two-phase commit coordination. | |
 | 2pcTimeout    | Timeout for distributed two-phase commit coordination. | 60s |
-| 2pcRecoveryPath   | Path to the recovery database used to recover from an orchestrator crash during a 2PC transaction. | |
 
 ## Performance Considerations
 

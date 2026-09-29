@@ -295,6 +295,14 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	if c.subscriber == nil {
 		c.subscriber = NewNoopSubscriber()
 	}
+	if binder, ok := c.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
+		localDB := sql.OpenDB(&noHooksConnector{driver: c.driver, dsn: c.dsn})
+		if err := binder.BindLocalDB(localDB); err != nil {
+			localDB.Close()
+			return nil, fmt.Errorf("bind two-phase commit local database: %w", err)
+		}
+		c.closers = append(c.closers, localDB)
+	}
 	if c.autoStart {
 		if c.waitFor == nil {
 			c.db = sql.OpenDB(&c)

@@ -482,12 +482,6 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 		streams = append(streams, stream)
 	}
 
-	defer func() {
-		for _, stream := range streams {
-			stream.CloseSend()
-		}
-	}()
-
 	// prepare
 	for _, stream := range streams {
 		err = stream.Send(req)
@@ -522,6 +516,9 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 
 	go func() {
 		defer func() {
+			for _, stream := range streams {
+				stream.CloseSend()
+			}
 			cancel()
 			p.mu.Unlock()
 		}()

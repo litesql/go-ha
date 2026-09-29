@@ -541,6 +541,9 @@ func (p *TwoPhaseCommitPublisher) commit() error {
 				if err != nil {
 					return err
 				}
+				if resp.Error != "" {
+					return fmt.Errorf("worker commit: %s", resp.Error)
+				}
 			}
 			delete(wk, remote)
 			wkJSON, _ := json.Marshal(wk)

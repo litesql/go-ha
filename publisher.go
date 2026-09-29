@@ -525,13 +525,12 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 		}()
 		req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
 		for _, stream := range streams {
-			err = stream.Send(req)
+			err := stream.Send(req)
 			if err != nil {
 				panic(err)
 			}
 
-			var resp *sqlv1.ChangeSetResponse
-			resp, err = stream.Recv()
+			resp, err := stream.Recv()
 			if err != nil {
 				panic(err)
 			}

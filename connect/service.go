@@ -873,10 +873,11 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				}
 				continue
 			}
-
-			_, err = tx.ExecContext(ctx, `UPDATE ha_2pc_transactions SET state = 'COMMITTED' WHERE transaction_id = ?`, transactionID)
-			if err == nil {
-				err = tx.Commit()
+			if tx != nil {
+				_, err = tx.ExecContext(ctx, `UPDATE ha_2pc_transactions SET state = 'COMMITTED' WHERE transaction_id = ?`, transactionID)
+				if err == nil {
+					err = tx.Commit()
+				}
 			}
 			tx = nil
 			var msg string

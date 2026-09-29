@@ -436,7 +436,7 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 	}
 
 	defer func() {
-		if err != nil {
+		if err != nil && p.recoveryDB != nil {
 			for {
 				if errCommit := p.commit(); errCommit == nil {
 					err = nil

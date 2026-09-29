@@ -135,7 +135,6 @@ const (
 	TransactionState_TRANSACTION_STATE_UNSPECIFIED TransactionState = 0
 	TransactionState_TRANSACTION_STATE_PREPARED    TransactionState = 1
 	TransactionState_TRANSACTION_STATE_COMMITTED   TransactionState = 2
-	TransactionState_TRANSACTION_STATE_ABORTED     TransactionState = 3
 )
 
 // Enum value maps for TransactionState.
@@ -144,13 +143,11 @@ var (
 		0: "TRANSACTION_STATE_UNSPECIFIED",
 		1: "TRANSACTION_STATE_PREPARED",
 		2: "TRANSACTION_STATE_COMMITTED",
-		3: "TRANSACTION_STATE_ABORTED",
 	}
 	TransactionState_value = map[string]int32{
 		"TRANSACTION_STATE_UNSPECIFIED": 0,
 		"TRANSACTION_STATE_PREPARED":    1,
 		"TRANSACTION_STATE_COMMITTED":   2,
-		"TRANSACTION_STATE_ABORTED":     3,
 	}
 )
 
@@ -1190,12 +1187,11 @@ const file_sql_v1_sql_proto_rawDesc = "" +
 	"\x1eCHANGESET_REQUEST_TYPE_PREPARE\x10\x01\x12!\n" +
 	"\x1dCHANGESET_REQUEST_TYPE_COMMIT\x10\x02\x12 \n" +
 	"\x1cCHANGESET_REQUEST_TYPE_ABORT\x10\x03\x12!\n" +
-	"\x1dCHANGESET_REQUEST_TYPE_STATUS\x10\x04*\x95\x01\n" +
+	"\x1dCHANGESET_REQUEST_TYPE_STATUS\x10\x04*v\n" +
 	"\x10TransactionState\x12!\n" +
 	"\x1dTRANSACTION_STATE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aTRANSACTION_STATE_PREPARED\x10\x01\x12\x1f\n" +
-	"\x1bTRANSACTION_STATE_COMMITTED\x10\x02\x12\x1d\n" +
-	"\x19TRANSACTION_STATE_ABORTED\x10\x032\xd6\x03\n" +
+	"\x1bTRANSACTION_STATE_COMMITTED\x10\x022\xd6\x03\n" +
 	"\x0fDatabaseService\x12:\n" +
 	"\x05Query\x12\x14.sql.v1.QueryRequest\x1a\x15.sql.v1.QueryResponse\"\x00(\x010\x01\x12T\n" +
 	"\x0fDataSourceNames\x12\x1e.sql.v1.DataSourceNamesRequest\x1a\x1f.sql.v1.DataSourceNamesResponse\"\x00\x12A\n" +

@@ -341,6 +341,12 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 	}
 
 	var sequence uint64 = 1
+	p := TwoPhaseCommitPublisher{
+		sequence:   sequence,
+		timeout:    timeout,
+		workers:    workers,
+		recoveryDB: recoveryDB,
+	}
 	if recoveryDB != nil {
 		_, err = recoveryDB.ExecContext(context.Background(), `
 		CREATE TABLE IF NOT EXISTS ha_2pc_recovery(
@@ -353,92 +359,11 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 		if err != nil {
 			return nil, fmt.Errorf("create ha_2pc_recovery table: %w", err)
 		}
-		var recoveryChangeSet, recoveryWorkers, recoveryDecision string
-		recoveryDB.QueryRowContext(context.Background(), `SELECT changeset, workers, sequence, decision FROM ha_2pc_recovery WHERE id = 1`).Scan(&recoveryChangeSet, &recoveryWorkers, &sequence, &recoveryDecision)
-		if recoveryChangeSet != "" && recoveryWorkers != "" {
-			var (
-				cs ChangeSet
-				wk map[string]string
-			)
-			err := json.Unmarshal([]byte(recoveryChangeSet), &cs)
-			if err != nil {
-				return nil, fmt.Errorf("unmarshal changest: %w", err)
-			}
-			cs.SetStrategy(defaultStrategy)
-			err = json.Unmarshal([]byte(recoveryWorkers), &wk)
-			if err != nil {
-				return nil, fmt.Errorf("unmarshal workers: %w", err)
-			}
-			workers, err := connectTwoPhaseCommitWorkers(wk)
-			if err != nil {
-				return nil, fmt.Errorf("connect workers to start recovery process: %w", err)
-			}
 
-			req, err := changeSetToProto(&cs)
-			if err != nil {
-				return nil, err
-			}
-
-			streams := make(map[string]grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse])
-			// connect
-			for remote, w := range workers {
-				stream, err := w.ChangeSet(context.Background())
-				if err != nil {
-					return nil, err
-				}
-				streams[remote] = stream
-			}
-
-			defer func() {
-				for _, stream := range streams {
-					stream.CloseSend()
-				}
-			}()
-
-			req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_STATUS
-			for remote, stream := range streams {
-				err = stream.Send(req)
-				if err != nil {
-					return nil, err
-				}
-
-				resp, err := stream.Recv()
-				if err != nil {
-					return nil, err
-				}
-				if resp.Error != "" {
-					return nil, fmt.Errorf("worker status: %s", resp.Error)
-				}
-				if recoveryDecision == "COMMIT" && resp.State == sqlv1.TransactionState_TRANSACTION_STATE_PREPARED {
-					req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
-					if err := stream.Send(req); err != nil {
-						return nil, err
-					}
-					resp, err = stream.Recv()
-					if err != nil {
-						return nil, err
-					}
-				} else if recoveryDecision == "" && resp.State == sqlv1.TransactionState_TRANSACTION_STATE_PREPARED {
-					req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_ABORT
-					if err := stream.Send(req); err != nil {
-						return nil, err
-					}
-					resp, err = stream.Recv()
-					if err != nil {
-						return nil, err
-					}
-				}
-				if recoveryDecision == "COMMIT" && resp.State != sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED {
-					return nil, fmt.Errorf("worker transaction %q is not committed", req.TransactionId)
-				}
-				delete(wk, remote)
-				wkJSON, _ := json.Marshal(wk)
-				_, err = recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET workers = ? WHERE id = 1`, string(wkJSON))
-				if err != nil {
-					return nil, fmt.Errorf("update 2pc recovery table: %w", err)
-				}
-			}
+		if err := p.commit(); err != nil {
+			return nil, fmt.Errorf("commit recovery: %w", err)
 		}
+
 		wkJSON, _ := json.Marshal(workersKeys)
 		_, err = recoveryDB.ExecContext(context.Background(), `REPLACE INTO ha_2pc_recovery(id, changeset, workers, sequence, decision) VALUES(1, '', ?, ?, '')`, string(wkJSON), sequence)
 		if err != nil {
@@ -446,12 +371,7 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 		}
 	}
 
-	return &TwoPhaseCommitPublisher{
-		sequence:   sequence,
-		timeout:    timeout,
-		workers:    workers,
-		recoveryDB: recoveryDB,
-	}, nil
+	return &p, nil
 }
 
 func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
@@ -459,6 +379,8 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 		return nil
 	}
 	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if cs.TransactionID == "" {
 		cs.TransactionID = uuid.NewString()
 	}
@@ -470,14 +392,20 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE
 
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
 
 	var streams []grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]
+
+	defer func() {
+		for _, stream := range streams {
+			stream.CloseSend()
+		}
+	}()
+
 	// connect
 	for _, w := range p.workers {
 		stream, err := w.ChangeSet(ctx)
 		if err != nil {
-			p.mu.Unlock()
-			cancel()
 			return err
 		}
 		streams = append(streams, stream)
@@ -487,71 +415,142 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 	for _, stream := range streams {
 		err = stream.Send(req)
 		if err != nil {
-			p.mu.Unlock()
-			cancel()
 			return err
 		}
 
 		resp, err := stream.Recv()
 		if err != nil {
-			p.mu.Unlock()
-			cancel()
 			return err
 		}
 		if resp.Error != "" {
-			p.mu.Unlock()
-			cancel()
 			return fmt.Errorf("worker prepare: %s", resp.Error)
 		}
 	}
 
 	if p.recoveryDB != nil {
-		csJSON, _ := json.Marshal(cs)
+		csJSON, _ := json.Marshal(req)
 		_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = ?, decision = 'COMMIT' WHERE id = 1`, csJSON)
 		if err != nil {
-			p.mu.Unlock()
-			cancel()
 			return fmt.Errorf("update ha_2pc_recovery table: %w", err)
 		}
 	}
 
-	go func() {
-		defer func() {
-			for _, stream := range streams {
-				stream.CloseSend()
-			}
-			cancel()
-			p.mu.Unlock()
-		}()
-		req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
-		for _, stream := range streams {
-			err := stream.Send(req)
-			if err != nil {
-				panic(err)
-			}
-
-			resp, err := stream.Recv()
-			if err != nil {
-				panic(err)
-			}
-			if resp.Error != "" {
-				panic(fmt.Sprintf("worker commit: %s", resp.Error))
-			}
-		}
-		p.sequence++
-		if p.recoveryDB != nil {
-			_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = '', decision = '', sequence = ? WHERE id = 1`, p.sequence)
-			if err != nil {
-				panic(fmt.Sprintf("update ha_2pc_recovery table: %v", err))
+	defer func() {
+		if err != nil {
+			for {
+				if errCommit := p.commit(); errCommit == nil {
+					err = nil
+					return
+				}
+				time.Sleep(500 * time.Millisecond)
 			}
 		}
 	}()
+
+	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
+	for _, stream := range streams {
+		err = stream.Send(req)
+		if err != nil {
+			return
+		}
+
+		var resp *sqlv1.ChangeSetResponse
+		resp, err = stream.Recv()
+		if err != nil {
+			return
+		}
+		if resp.Error != "" {
+			err = fmt.Errorf("worker commit: %s", resp.Error)
+			return
+		}
+	}
+	p.sequence++
+	if p.recoveryDB != nil {
+		if _, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = '', decision = '', sequence = ? WHERE id = 1`, p.sequence); err != nil {
+			slog.Error("update ha_2pc_recovery table", "error", err)
+		}
+	}
 
 	return nil
 }
 
 func (p *TwoPhaseCommitPublisher) Sequence() uint64 {
 	return p.sequence
+}
+
+func (p *TwoPhaseCommitPublisher) commit() error {
+	if p.recoveryDB == nil {
+		return nil
+	}
+	var recoveryChangeSet, recoveryWorkers, recoveryDecision string
+	p.recoveryDB.QueryRowContext(context.Background(), `SELECT changeset, workers, sequence, decision FROM ha_2pc_recovery WHERE id = 1`).Scan(&recoveryChangeSet, &recoveryWorkers, &p.sequence, &recoveryDecision)
+	if recoveryChangeSet != "" && recoveryWorkers != "" {
+		var (
+			req *sqlv1.ChangeSetRequest
+			wk  map[string]string
+		)
+		err := json.Unmarshal([]byte(recoveryChangeSet), &req)
+		if err != nil {
+			return fmt.Errorf("unmarshal changest: %w", err)
+		}
+		err = json.Unmarshal([]byte(recoveryWorkers), &wk)
+		if err != nil {
+			return fmt.Errorf("unmarshal workers: %w", err)
+		}
+		workers, err := connectTwoPhaseCommitWorkers(wk)
+		if err != nil {
+			return fmt.Errorf("connect workers to start recovery process: %w", err)
+		}
+
+		streams := make(map[string]grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse])
+		// connect
+		for remote, w := range workers {
+			stream, err := w.ChangeSet(context.Background())
+			if err != nil {
+				return err
+			}
+			streams[remote] = stream
+		}
+
+		defer func() {
+			for _, stream := range streams {
+				stream.CloseSend()
+			}
+		}()
+
+		req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_STATUS
+		for remote, stream := range streams {
+			err = stream.Send(req)
+			if err != nil {
+				return err
+			}
+
+			resp, err := stream.Recv()
+			if err != nil {
+				return err
+			}
+			if resp.Error != "" {
+				return fmt.Errorf("worker status: %s", resp.Error)
+			}
+			if recoveryDecision == "COMMIT" && resp.State != sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED {
+				req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
+				if err := stream.Send(req); err != nil {
+					return err
+				}
+				resp, err = stream.Recv()
+				if err != nil {
+					return err
+				}
+			}
+			delete(wk, remote)
+			wkJSON, _ := json.Marshal(wk)
+			_, err = p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET workers = ? WHERE id = 1`, string(wkJSON))
+			if err != nil {
+				return fmt.Errorf("update 2pc recovery table: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func connectTwoPhaseCommitWorkers(workersKeys map[string]string) (map[string]sqlv1.DatabaseServiceClient, error) {

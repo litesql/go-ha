@@ -777,8 +777,8 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				response.State = sqlv1.TransactionState_TRANSACTION_STATE_PREPARED
 			case "COMMITTED":
 				response.State = sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED
-			case "ABORTED":
-				response.State = sqlv1.TransactionState_TRANSACTION_STATE_ABORTED
+			default:
+				response.State = sqlv1.TransactionState_TRANSACTION_STATE_UNSPECIFIED
 			}
 			if err := stream.Send(response); err != nil {
 				return err

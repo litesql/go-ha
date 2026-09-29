@@ -276,7 +276,9 @@ func (cs *ChangeSet) propagate(ctx context.Context, conn *sql.Conn) (err error) 
 
 func (cs *ChangeSet) DebeziumData() []DebeziumData {
 	var list []DebeziumData
-	transactionID := uuid.New().String()
+	if cs.TransactionID == "" {
+		cs.TransactionID = uuid.New().String()
+	}
 	for _, change := range cs.Changes {
 		var data DebeziumData
 		switch change.Operation {
@@ -300,7 +302,7 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 		data.Payload.Source.Table = change.Table
 		data.Payload.Source.TsNs = cs.Timestamp
 		data.Payload.TsNs = change.TsNs
-		data.Transaction.ID = transactionID
+		data.Transaction.ID = cs.TransactionID
 		list = append(list, data)
 	}
 	return list

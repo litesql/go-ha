@@ -386,7 +386,6 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 	}
 	req, err := changeSetToProto(cs)
 	if err != nil {
-		p.mu.Unlock()
 		return err
 	}
 	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE

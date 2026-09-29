@@ -684,10 +684,10 @@ func createChangeSetUndoTable(id string, hadb HADB) error {
 	defer hadb.EnableHooks(conn)
 
 	_, err = conn.ExecContext(context.Background(),
-		`CREATE TABLE IF NOT EXISTS ha_2pc_latest_undo(
-			id INTEGER PRIMARY KEY CHECK (id = 1),			
-			timestamp_ns INTEGER
-	)`)
+		`CREATE TABLE IF NOT EXISTS ha_2pc_transactions(
+			transaction_id TEXT PRIMARY KEY,
+			state TEXT NOT NULL
+		)`)
 	if err != nil {
 		return fmt.Errorf("create changeset recovery table for %q: %w", id, err)
 	}
@@ -701,6 +701,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 		db            *sql.DB
 		conn          *ConnHooksEnabler
 		tx            *sql.Tx
+		transactionID string
 	)
 	defer func() {
 		if tx != nil {
@@ -762,6 +763,29 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			}
 		}
 
+		if req.Type == sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_STATUS {
+			var state string
+			err := db.QueryRowContext(ctx, `SELECT state FROM ha_2pc_transactions WHERE transaction_id = ?`, req.TransactionId).Scan(&state)
+			if errors.Is(err, sql.ErrNoRows) {
+				state = ""
+			} else if err != nil {
+				return err
+			}
+			response := &sqlv1.ChangeSetResponse{TransactionId: req.TransactionId}
+			switch state {
+			case "PREPARED":
+				response.State = sqlv1.TransactionState_TRANSACTION_STATE_PREPARED
+			case "COMMITTED":
+				response.State = sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED
+			case "ABORTED":
+				response.State = sqlv1.TransactionState_TRANSACTION_STATE_ABORTED
+			}
+			if err := stream.Send(response); err != nil {
+				return err
+			}
+			continue
+		}
+
 		worker, err := s.TwoPhaseCommitWorkerConverter(req)
 		if err != nil {
 			err := stream.Send(&sqlv1.ChangeSetResponse{
@@ -775,6 +799,18 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 
 		switch req.Type {
 		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE:
+			if req.TransactionId == "" {
+				if err := stream.Send(&sqlv1.ChangeSetResponse{Error: "transaction id is required"}); err != nil {
+					return err
+				}
+				continue
+			}
+			if transactionID == req.TransactionId && tx != nil {
+				if err := stream.Send(&sqlv1.ChangeSetResponse{TransactionId: req.TransactionId, State: sqlv1.TransactionState_TRANSACTION_STATE_PREPARED}); err != nil {
+					return err
+				}
+				continue
+			}
 			if tx != nil {
 				tx.Rollback()
 				tx = nil
@@ -801,22 +837,47 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				}
 				continue
 			}
-			err := stream.Send(&sqlv1.ChangeSetResponse{})
+			transactionID = req.TransactionId
+			err := stream.Send(&sqlv1.ChangeSetResponse{TransactionId: transactionID, State: sqlv1.TransactionState_TRANSACTION_STATE_PREPARED})
 			if err != nil {
 				return err
 			}
 		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT:
 			if tx == nil {
-				err := stream.Send(&sqlv1.ChangeSetResponse{
-					Error: "no active transaction",
-				})
+				var state string
+				if queryErr := db.QueryRowContext(ctx, `SELECT state FROM ha_2pc_transactions WHERE transaction_id = ?`, req.TransactionId).Scan(&state); queryErr == nil && state == "COMMITTED" {
+					if err := stream.Send(&sqlv1.ChangeSetResponse{TransactionId: req.TransactionId, State: sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED}); err != nil {
+						return err
+					}
+					continue
+				}
+				conn, tx, err = worker.Prepare(db)
 				if err != nil {
+					if tx != nil {
+						_ = tx.Rollback()
+					}
+					if conn != nil {
+						_ = conn.Close()
+					}
+					err = stream.Send(&sqlv1.ChangeSetResponse{Error: fmt.Sprintf("commit replay prepare: %s", err)})
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				transactionID = req.TransactionId
+			}
+			if transactionID != req.TransactionId {
+				if err := stream.Send(&sqlv1.ChangeSetResponse{Error: "transaction id does not match prepared transaction"}); err != nil {
 					return err
 				}
 				continue
 			}
 
-			err = tx.Commit()
+			_, err = tx.ExecContext(ctx, `UPDATE ha_2pc_transactions SET state = 'COMMITTED' WHERE transaction_id = ?`, transactionID)
+			if err == nil {
+				err = tx.Commit()
+			}
 			tx = nil
 			var msg string
 			err = errors.Join(err, worker.AfterCommit(conn.SqlConn, err))
@@ -827,7 +888,12 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				err = errors.Join(err, conn.Close())
 				conn = nil
 			}
-			if err := stream.Send(&sqlv1.ChangeSetResponse{Error: msg}); err != nil {
+			state := sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED
+			if msg != "" {
+				state = sqlv1.TransactionState_TRANSACTION_STATE_UNSPECIFIED
+			}
+			transactionID = ""
+			if err := stream.Send(&sqlv1.ChangeSetResponse{Error: msg, TransactionId: req.TransactionId, State: state}); err != nil {
 				return err
 			}
 			continue
@@ -848,6 +914,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				err = errors.Join(err, conn.Close())
 				conn = nil
 			}
+			transactionID = ""
 			var msg string
 			if err != nil {
 				msg = err.Error()
@@ -856,56 +923,6 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				return err
 			}
 			continue
-		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO:
-			if tx != nil {
-				err := stream.Send(&sqlv1.ChangeSetResponse{
-					Error: "transaction is active",
-				})
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			err = worker.UndoLocal(db)
-			if err != nil {
-				err := stream.Send(&sqlv1.ChangeSetResponse{
-					Error: fmt.Sprintf("undo: %s", err.Error()),
-				})
-				if err != nil {
-					return err
-				}
-				continue
-			}
-		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH:
-			if tx != nil {
-				err := stream.Send(&sqlv1.ChangeSetResponse{
-					Error: "transaction is active",
-				})
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			var latestUndoTimestamp int64
-			db.QueryRowContext(ctx, "SELECT timestamp_ns FROM ha_2pc_latest_undo WHERE id = 1").Scan(&latestUndoTimestamp)
-			if latestUndoTimestamp == req.TimestampNs {
-				// The latest undo operation has already been applied
-				err := stream.Send(&sqlv1.ChangeSetResponse{})
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			err = worker.UndoLocal(db)
-			if err != nil {
-				err := stream.Send(&sqlv1.ChangeSetResponse{
-					Error: fmt.Sprintf("undo after crash: %s", err.Error()),
-				})
-				if err != nil {
-					return err
-				}
-				continue
-			}
 		}
 	}
 }

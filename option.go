@@ -474,12 +474,13 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 	}
 
 	if len(twoPhaseCommitPeers) > 0 {
+		if twoPhaseCommitRecoveryPath == "" {
+			return "", nil, fmt.Errorf("2pcRecoveryPath is required when 2pcPeers is configured")
+		}
 		var recoveryDB *sql.DB
-		if twoPhaseCommitRecoveryPath != "" {
-			recoveryDB, err = sql.Open(baseDriver, fmt.Sprintf("file:%s", twoPhaseCommitRecoveryPath))
-			if err != nil {
-				return "", nil, err
-			}
+		recoveryDB, err = sql.Open(baseDriver, fmt.Sprintf("file:%s", twoPhaseCommitRecoveryPath))
+		if err != nil {
+			return "", nil, err
 		}
 		pub, err := NewTwoPhaseCommitPublisher(twoPhaseCommitPeers, twoPhaseCommitTimeout, recoveryDB)
 		if err != nil {

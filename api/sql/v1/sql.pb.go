@@ -77,12 +77,11 @@ func (QueryType) EnumDescriptor() ([]byte, []int) {
 type CangeSetRequestType int32
 
 const (
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PING             CangeSetRequestType = 0
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE          CangeSetRequestType = 1
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT           CangeSetRequestType = 2
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_ABORT            CangeSetRequestType = 3
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO             CangeSetRequestType = 4
-	CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH CangeSetRequestType = 5
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PING    CangeSetRequestType = 0
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE CangeSetRequestType = 1
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT  CangeSetRequestType = 2
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_ABORT   CangeSetRequestType = 3
+	CangeSetRequestType_CHANGESET_REQUEST_TYPE_STATUS  CangeSetRequestType = 4
 )
 
 // Enum value maps for CangeSetRequestType.
@@ -92,16 +91,14 @@ var (
 		1: "CHANGESET_REQUEST_TYPE_PREPARE",
 		2: "CHANGESET_REQUEST_TYPE_COMMIT",
 		3: "CHANGESET_REQUEST_TYPE_ABORT",
-		4: "CHANGESET_REQUEST_TYPE_UNDO",
-		5: "CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH",
+		4: "CHANGESET_REQUEST_TYPE_STATUS",
 	}
 	CangeSetRequestType_value = map[string]int32{
-		"CHANGESET_REQUEST_TYPE_PING":             0,
-		"CHANGESET_REQUEST_TYPE_PREPARE":          1,
-		"CHANGESET_REQUEST_TYPE_COMMIT":           2,
-		"CHANGESET_REQUEST_TYPE_ABORT":            3,
-		"CHANGESET_REQUEST_TYPE_UNDO":             4,
-		"CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH": 5,
+		"CHANGESET_REQUEST_TYPE_PING":    0,
+		"CHANGESET_REQUEST_TYPE_PREPARE": 1,
+		"CHANGESET_REQUEST_TYPE_COMMIT":  2,
+		"CHANGESET_REQUEST_TYPE_ABORT":   3,
+		"CHANGESET_REQUEST_TYPE_STATUS":  4,
 	}
 )
 
@@ -130,6 +127,58 @@ func (x CangeSetRequestType) Number() protoreflect.EnumNumber {
 // Deprecated: Use CangeSetRequestType.Descriptor instead.
 func (CangeSetRequestType) EnumDescriptor() ([]byte, []int) {
 	return file_sql_v1_sql_proto_rawDescGZIP(), []int{1}
+}
+
+type TransactionState int32
+
+const (
+	TransactionState_TRANSACTION_STATE_UNSPECIFIED TransactionState = 0
+	TransactionState_TRANSACTION_STATE_PREPARED    TransactionState = 1
+	TransactionState_TRANSACTION_STATE_COMMITTED   TransactionState = 2
+	TransactionState_TRANSACTION_STATE_ABORTED     TransactionState = 3
+)
+
+// Enum value maps for TransactionState.
+var (
+	TransactionState_name = map[int32]string{
+		0: "TRANSACTION_STATE_UNSPECIFIED",
+		1: "TRANSACTION_STATE_PREPARED",
+		2: "TRANSACTION_STATE_COMMITTED",
+		3: "TRANSACTION_STATE_ABORTED",
+	}
+	TransactionState_value = map[string]int32{
+		"TRANSACTION_STATE_UNSPECIFIED": 0,
+		"TRANSACTION_STATE_PREPARED":    1,
+		"TRANSACTION_STATE_COMMITTED":   2,
+		"TRANSACTION_STATE_ABORTED":     3,
+	}
+)
+
+func (x TransactionState) Enum() *TransactionState {
+	p := new(TransactionState)
+	*p = x
+	return p
+}
+
+func (x TransactionState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransactionState) Descriptor() protoreflect.EnumDescriptor {
+	return file_sql_v1_sql_proto_enumTypes[2].Descriptor()
+}
+
+func (TransactionState) Type() protoreflect.EnumType {
+	return &file_sql_v1_sql_proto_enumTypes[2]
+}
+
+func (x TransactionState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransactionState.Descriptor instead.
+func (TransactionState) EnumDescriptor() ([]byte, []int) {
+	return file_sql_v1_sql_proto_rawDescGZIP(), []int{2}
 }
 
 type QueryRequest struct {
@@ -777,6 +826,7 @@ type ChangeSetRequest struct {
 	TimestampNs   int64                  `protobuf:"varint,5,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`
 	Strategy      string                 `protobuf:"bytes,6,opt,name=strategy,proto3" json:"strategy,omitempty"`
 	Changes       []*Change              `protobuf:"bytes,7,rep,name=changes,proto3" json:"changes,omitempty"`
+	TransactionId string                 `protobuf:"bytes,8,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -860,9 +910,18 @@ func (x *ChangeSetRequest) GetChanges() []*Change {
 	return nil
 }
 
+func (x *ChangeSetRequest) GetTransactionId() string {
+	if x != nil {
+		return x.TransactionId
+	}
+	return ""
+}
+
 type ChangeSetResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Error         string                 `protobuf:"bytes,1,opt,name=error,proto3" json:"error,omitempty"`
+	TransactionId string                 `protobuf:"bytes,2,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	State         TransactionState       `protobuf:"varint,3,opt,name=state,proto3,enum=sql.v1.TransactionState" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -902,6 +961,20 @@ func (x *ChangeSetResponse) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *ChangeSetResponse) GetTransactionId() string {
+	if x != nil {
+		return x.TransactionId
+	}
+	return ""
+}
+
+func (x *ChangeSetResponse) GetState() TransactionState {
+	if x != nil {
+		return x.State
+	}
+	return TransactionState_TRANSACTION_STATE_UNSPECIFIED
 }
 
 type Change struct {
@@ -1076,7 +1149,7 @@ const file_sql_v1_sql_proto_rawDesc = "" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"\x17\n" +
 	"\x15ReplicationIDsRequest\"?\n" +
 	"\x16ReplicationIDsResponse\x12%\n" +
-	"\x0ereplication_id\x18\x01 \x03(\tR\rreplicationId\"\xf7\x01\n" +
+	"\x0ereplication_id\x18\x01 \x03(\tR\rreplicationId\"\x9e\x02\n" +
 	"\x10ChangeSetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12/\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x1b.sql.v1.CangeSetRequestTypeR\x04type\x12\x12\n" +
@@ -1084,9 +1157,12 @@ const file_sql_v1_sql_proto_rawDesc = "" +
 	"\x0ereplication_id\x18\x04 \x01(\tR\rreplicationId\x12!\n" +
 	"\ftimestamp_ns\x18\x05 \x01(\x03R\vtimestampNs\x12\x1a\n" +
 	"\bstrategy\x18\x06 \x01(\tR\bstrategy\x12(\n" +
-	"\achanges\x18\a \x03(\v2\x0e.sql.v1.ChangeR\achanges\")\n" +
+	"\achanges\x18\a \x03(\v2\x0e.sql.v1.ChangeR\achanges\x12%\n" +
+	"\x0etransaction_id\x18\b \x01(\tR\rtransactionId\"\x80\x01\n" +
 	"\x11ChangeSetResponse\x12\x14\n" +
-	"\x05error\x18\x01 \x01(\tR\x05error\"\x8e\x03\n" +
+	"\x05error\x18\x01 \x01(\tR\x05error\x12%\n" +
+	"\x0etransaction_id\x18\x02 \x01(\tR\rtransactionId\x12.\n" +
+	"\x05state\x18\x03 \x01(\x0e2\x18.sql.v1.TransactionStateR\x05state\"\x8e\x03\n" +
 	"\x06Change\x12\x1a\n" +
 	"\bdatabase\x18\x01 \x01(\tR\bdatabase\x12\x14\n" +
 	"\x05table\x18\x02 \x01(\tR\x05table\x12\x18\n" +
@@ -1108,14 +1184,18 @@ const file_sql_v1_sql_proto_rawDesc = "" +
 	"\x16QUERY_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16QUERY_TYPE_EXEC_UPDATE\x10\x01\x12\x19\n" +
 	"\x15QUERY_TYPE_EXEC_QUERY\x10\x02\x12\x13\n" +
-	"\x0fQUERY_TYPE_PING\x10\x03*\xed\x01\n" +
+	"\x0fQUERY_TYPE_PING\x10\x03*\xc2\x01\n" +
 	"\x13CangeSetRequestType\x12\x1f\n" +
 	"\x1bCHANGESET_REQUEST_TYPE_PING\x10\x00\x12\"\n" +
 	"\x1eCHANGESET_REQUEST_TYPE_PREPARE\x10\x01\x12!\n" +
 	"\x1dCHANGESET_REQUEST_TYPE_COMMIT\x10\x02\x12 \n" +
-	"\x1cCHANGESET_REQUEST_TYPE_ABORT\x10\x03\x12\x1f\n" +
-	"\x1bCHANGESET_REQUEST_TYPE_UNDO\x10\x04\x12+\n" +
-	"'CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH\x10\x052\xd6\x03\n" +
+	"\x1cCHANGESET_REQUEST_TYPE_ABORT\x10\x03\x12!\n" +
+	"\x1dCHANGESET_REQUEST_TYPE_STATUS\x10\x04*\x95\x01\n" +
+	"\x10TransactionState\x12!\n" +
+	"\x1dTRANSACTION_STATE_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aTRANSACTION_STATE_PREPARED\x10\x01\x12\x1f\n" +
+	"\x1bTRANSACTION_STATE_COMMITTED\x10\x02\x12\x1d\n" +
+	"\x19TRANSACTION_STATE_ABORTED\x10\x032\xd6\x03\n" +
 	"\x0fDatabaseService\x12:\n" +
 	"\x05Query\x12\x14.sql.v1.QueryRequest\x1a\x15.sql.v1.QueryResponse\"\x00(\x010\x01\x12T\n" +
 	"\x0fDataSourceNames\x12\x1e.sql.v1.DataSourceNamesRequest\x1a\x1f.sql.v1.DataSourceNamesResponse\"\x00\x12A\n" +
@@ -1136,58 +1216,60 @@ func file_sql_v1_sql_proto_rawDescGZIP() []byte {
 	return file_sql_v1_sql_proto_rawDescData
 }
 
-var file_sql_v1_sql_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_sql_v1_sql_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_sql_v1_sql_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_sql_v1_sql_proto_goTypes = []any{
 	(QueryType)(0),                  // 0: sql.v1.QueryType
 	(CangeSetRequestType)(0),        // 1: sql.v1.CangeSetRequestType
-	(*QueryRequest)(nil),            // 2: sql.v1.QueryRequest
-	(*NamedValue)(nil),              // 3: sql.v1.NamedValue
-	(*QueryResponse)(nil),           // 4: sql.v1.QueryResponse
-	(*Data)(nil),                    // 5: sql.v1.Data
-	(*Row)(nil),                     // 6: sql.v1.Row
-	(*DataSourceNamesRequest)(nil),  // 7: sql.v1.DataSourceNamesRequest
-	(*DataSourceNamesResponse)(nil), // 8: sql.v1.DataSourceNamesResponse
-	(*DownloadRequest)(nil),         // 9: sql.v1.DownloadRequest
-	(*DownloadResponse)(nil),        // 10: sql.v1.DownloadResponse
-	(*LatestSnapshotRequest)(nil),   // 11: sql.v1.LatestSnapshotRequest
-	(*LatestSnapshotResponse)(nil),  // 12: sql.v1.LatestSnapshotResponse
-	(*ReplicationIDsRequest)(nil),   // 13: sql.v1.ReplicationIDsRequest
-	(*ReplicationIDsResponse)(nil),  // 14: sql.v1.ReplicationIDsResponse
-	(*ChangeSetRequest)(nil),        // 15: sql.v1.ChangeSetRequest
-	(*ChangeSetResponse)(nil),       // 16: sql.v1.ChangeSetResponse
-	(*Change)(nil),                  // 17: sql.v1.Change
-	(*anypb.Any)(nil),               // 18: google.protobuf.Any
+	(TransactionState)(0),           // 2: sql.v1.TransactionState
+	(*QueryRequest)(nil),            // 3: sql.v1.QueryRequest
+	(*NamedValue)(nil),              // 4: sql.v1.NamedValue
+	(*QueryResponse)(nil),           // 5: sql.v1.QueryResponse
+	(*Data)(nil),                    // 6: sql.v1.Data
+	(*Row)(nil),                     // 7: sql.v1.Row
+	(*DataSourceNamesRequest)(nil),  // 8: sql.v1.DataSourceNamesRequest
+	(*DataSourceNamesResponse)(nil), // 9: sql.v1.DataSourceNamesResponse
+	(*DownloadRequest)(nil),         // 10: sql.v1.DownloadRequest
+	(*DownloadResponse)(nil),        // 11: sql.v1.DownloadResponse
+	(*LatestSnapshotRequest)(nil),   // 12: sql.v1.LatestSnapshotRequest
+	(*LatestSnapshotResponse)(nil),  // 13: sql.v1.LatestSnapshotResponse
+	(*ReplicationIDsRequest)(nil),   // 14: sql.v1.ReplicationIDsRequest
+	(*ReplicationIDsResponse)(nil),  // 15: sql.v1.ReplicationIDsResponse
+	(*ChangeSetRequest)(nil),        // 16: sql.v1.ChangeSetRequest
+	(*ChangeSetResponse)(nil),       // 17: sql.v1.ChangeSetResponse
+	(*Change)(nil),                  // 18: sql.v1.Change
+	(*anypb.Any)(nil),               // 19: google.protobuf.Any
 }
 var file_sql_v1_sql_proto_depIdxs = []int32{
 	0,  // 0: sql.v1.QueryRequest.type:type_name -> sql.v1.QueryType
-	3,  // 1: sql.v1.QueryRequest.params:type_name -> sql.v1.NamedValue
-	18, // 2: sql.v1.NamedValue.value:type_name -> google.protobuf.Any
-	5,  // 3: sql.v1.QueryResponse.result_set:type_name -> sql.v1.Data
-	6,  // 4: sql.v1.Data.rows:type_name -> sql.v1.Row
-	18, // 5: sql.v1.Row.values:type_name -> google.protobuf.Any
+	4,  // 1: sql.v1.QueryRequest.params:type_name -> sql.v1.NamedValue
+	19, // 2: sql.v1.NamedValue.value:type_name -> google.protobuf.Any
+	6,  // 3: sql.v1.QueryResponse.result_set:type_name -> sql.v1.Data
+	7,  // 4: sql.v1.Data.rows:type_name -> sql.v1.Row
+	19, // 5: sql.v1.Row.values:type_name -> google.protobuf.Any
 	1,  // 6: sql.v1.ChangeSetRequest.type:type_name -> sql.v1.CangeSetRequestType
-	17, // 7: sql.v1.ChangeSetRequest.changes:type_name -> sql.v1.Change
-	18, // 8: sql.v1.Change.old_values:type_name -> google.protobuf.Any
-	18, // 9: sql.v1.Change.new_values:type_name -> google.protobuf.Any
-	18, // 10: sql.v1.Change.args:type_name -> google.protobuf.Any
-	2,  // 11: sql.v1.DatabaseService.Query:input_type -> sql.v1.QueryRequest
-	7,  // 12: sql.v1.DatabaseService.DataSourceNames:input_type -> sql.v1.DataSourceNamesRequest
-	9,  // 13: sql.v1.DatabaseService.Download:input_type -> sql.v1.DownloadRequest
-	11, // 14: sql.v1.DatabaseService.LatestSnapshot:input_type -> sql.v1.LatestSnapshotRequest
-	13, // 15: sql.v1.DatabaseService.ReplicationIDs:input_type -> sql.v1.ReplicationIDsRequest
-	15, // 16: sql.v1.DatabaseService.ChangeSet:input_type -> sql.v1.ChangeSetRequest
-	4,  // 17: sql.v1.DatabaseService.Query:output_type -> sql.v1.QueryResponse
-	8,  // 18: sql.v1.DatabaseService.DataSourceNames:output_type -> sql.v1.DataSourceNamesResponse
-	10, // 19: sql.v1.DatabaseService.Download:output_type -> sql.v1.DownloadResponse
-	12, // 20: sql.v1.DatabaseService.LatestSnapshot:output_type -> sql.v1.LatestSnapshotResponse
-	14, // 21: sql.v1.DatabaseService.ReplicationIDs:output_type -> sql.v1.ReplicationIDsResponse
-	16, // 22: sql.v1.DatabaseService.ChangeSet:output_type -> sql.v1.ChangeSetResponse
-	17, // [17:23] is the sub-list for method output_type
-	11, // [11:17] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	18, // 7: sql.v1.ChangeSetRequest.changes:type_name -> sql.v1.Change
+	2,  // 8: sql.v1.ChangeSetResponse.state:type_name -> sql.v1.TransactionState
+	19, // 9: sql.v1.Change.old_values:type_name -> google.protobuf.Any
+	19, // 10: sql.v1.Change.new_values:type_name -> google.protobuf.Any
+	19, // 11: sql.v1.Change.args:type_name -> google.protobuf.Any
+	3,  // 12: sql.v1.DatabaseService.Query:input_type -> sql.v1.QueryRequest
+	8,  // 13: sql.v1.DatabaseService.DataSourceNames:input_type -> sql.v1.DataSourceNamesRequest
+	10, // 14: sql.v1.DatabaseService.Download:input_type -> sql.v1.DownloadRequest
+	12, // 15: sql.v1.DatabaseService.LatestSnapshot:input_type -> sql.v1.LatestSnapshotRequest
+	14, // 16: sql.v1.DatabaseService.ReplicationIDs:input_type -> sql.v1.ReplicationIDsRequest
+	16, // 17: sql.v1.DatabaseService.ChangeSet:input_type -> sql.v1.ChangeSetRequest
+	5,  // 18: sql.v1.DatabaseService.Query:output_type -> sql.v1.QueryResponse
+	9,  // 19: sql.v1.DatabaseService.DataSourceNames:output_type -> sql.v1.DataSourceNamesResponse
+	11, // 20: sql.v1.DatabaseService.Download:output_type -> sql.v1.DownloadResponse
+	13, // 21: sql.v1.DatabaseService.LatestSnapshot:output_type -> sql.v1.LatestSnapshotResponse
+	15, // 22: sql.v1.DatabaseService.ReplicationIDs:output_type -> sql.v1.ReplicationIDsResponse
+	17, // 23: sql.v1.DatabaseService.ChangeSet:output_type -> sql.v1.ChangeSetResponse
+	18, // [18:24] is the sub-list for method output_type
+	12, // [12:18] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_sql_v1_sql_proto_init() }
@@ -1200,7 +1282,7 @@ func file_sql_v1_sql_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sql_v1_sql_proto_rawDesc), len(file_sql_v1_sql_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,

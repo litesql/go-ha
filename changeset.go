@@ -18,16 +18,17 @@ import (
 const controlTableName = "ha_stats"
 
 type ChangeSet struct {
-	interceptor  ChangeSetInterceptor
-	connProvider ConnHooksProvider
-	strategy     sqlStrategy
-	Node         string   `json:"node"`
-	ProcessID    int64    `json:"process_id"`
-	Filename     string   `json:"filename"`
-	Changes      []Change `json:"changes"`
-	Timestamp    int64    `json:"timestamp_ns"`
-	Subject      string   `json:"-"`
-	StreamSeq    uint64   `json:"-"`
+	interceptor   ChangeSetInterceptor
+	connProvider  ConnHooksProvider
+	strategy      sqlStrategy
+	Node          string   `json:"node"`
+	ProcessID     int64    `json:"process_id"`
+	Filename      string   `json:"filename"`
+	Changes       []Change `json:"changes"`
+	Timestamp     int64    `json:"timestamp_ns"`
+	TransactionID string   `json:"transaction_id,omitempty"`
+	Subject       string   `json:"-"`
+	StreamSeq     uint64   `json:"-"`
 }
 
 type sqlStrategy interface {
@@ -111,6 +112,12 @@ func (cs *ChangeSet) Prepare(db *sql.DB) (conn *haconnect.ConnHooksEnabler, tx *
 	tx, err = sqlConn.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return
+	}
+	if cs.TransactionID != "" {
+		_, err = tx.ExecContext(ctx, `INSERT INTO ha_2pc_transactions(transaction_id, state) VALUES (?, 'PREPARED')`, cs.TransactionID)
+		if err != nil {
+			return
+		}
 	}
 	for _, change := range cs.Changes {
 		if change.Table == controlTableName {
@@ -260,15 +267,6 @@ func (cs *ChangeSet) propagate(ctx context.Context, conn *sql.Conn) (err error) 
 			slog.Error("failed to propagate change", "error", err, "stream_seq", cs.StreamSeq, "sql", sql)
 			err = errors.Join(err, tx.Rollback())
 			return err
-		}
-	}
-
-	// from twho-phase commit
-	if cs.Subject == "" {
-		_, err = tx.ExecContext(ctx, `REPLACE INTO ha_2pc_latest_undo(id, timestamp_ns) VALUES (1, ?)`, cs.Timestamp)
-		if err != nil {
-			slog.Error("failed to update ha_2pc_latest_undo table", "error", err)
-			return fmt.Errorf("update ha_2pc_latest_undo table: %w", err)
 		}
 	}
 
@@ -470,6 +468,7 @@ func changeSetToProto(cs *ChangeSet) (*sqlv1.ChangeSetRequest, error) {
 		ReplicationId: cs.Filename,
 		TimestampNs:   cs.Timestamp,
 		Strategy:      cs.strategy.Name(),
+		TransactionId: cs.TransactionID,
 	}
 	req.Changes = make([]*sqlv1.Change, len(cs.Changes))
 	for i, item := range cs.Changes {

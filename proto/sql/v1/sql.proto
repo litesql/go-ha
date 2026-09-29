@@ -88,6 +88,7 @@ message ChangeSetRequest {
   int64 timestamp_ns = 5;
   string strategy = 6;
   repeated Change changes = 7;
+  string transaction_id = 8;
 }
 
 enum CangeSetRequestType {
@@ -95,12 +96,20 @@ enum CangeSetRequestType {
   CHANGESET_REQUEST_TYPE_PREPARE = 1;
   CHANGESET_REQUEST_TYPE_COMMIT = 2;
   CHANGESET_REQUEST_TYPE_ABORT = 3;
-  CHANGESET_REQUEST_TYPE_UNDO = 4;
-  CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH = 5;
+  CHANGESET_REQUEST_TYPE_STATUS = 4;
 }
 
 message ChangeSetResponse {
   string error = 1;
+  string transaction_id = 2;
+  TransactionState state = 3;
+}
+
+enum TransactionState {
+  TRANSACTION_STATE_UNSPECIFIED = 0;
+  TRANSACTION_STATE_PREPARED = 1;
+  TRANSACTION_STATE_COMMITTED = 2;
+  TRANSACTION_STATE_ABORTED = 3;
 }
 
 message Change {

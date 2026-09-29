@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -345,13 +346,14 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			changeset JSONB,
 			workers JSONB,
-			sequence INTEGER
+			sequence INTEGER,
+			decision TEXT NOT NULL DEFAULT ''
 		)`)
 		if err != nil {
 			return nil, fmt.Errorf("create ha_2pc_recovery table: %w", err)
 		}
-		var recoveryChangeSet, recoveryWorkers string
-		recoveryDB.QueryRowContext(context.Background(), `SELECT changeset, workers, sequence FROM ha_2pc_recovery WHERE id = 1`).Scan(&recoveryChangeSet, &recoveryWorkers, &sequence)
+		var recoveryChangeSet, recoveryWorkers, recoveryDecision string
+		recoveryDB.QueryRowContext(context.Background(), `SELECT changeset, workers, sequence, decision FROM ha_2pc_recovery WHERE id = 1`).Scan(&recoveryChangeSet, &recoveryWorkers, &sequence, &recoveryDecision)
 		if recoveryChangeSet != "" && recoveryWorkers != "" {
 			var (
 				cs ChangeSet
@@ -391,8 +393,7 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 				}
 			}()
 
-			req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO_AFTER_CRASH
-			// undo
+			req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_STATUS
 			for remote, stream := range streams {
 				err = stream.Send(req)
 				if err != nil {
@@ -404,7 +405,29 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 					return nil, err
 				}
 				if resp.Error != "" {
-					return nil, fmt.Errorf("worker recovery: %s", resp.Error)
+					return nil, fmt.Errorf("worker status: %s", resp.Error)
+				}
+				if recoveryDecision == "COMMIT" && resp.State == sqlv1.TransactionState_TRANSACTION_STATE_PREPARED {
+					req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT
+					if err := stream.Send(req); err != nil {
+						return nil, err
+					}
+					resp, err = stream.Recv()
+					if err != nil {
+						return nil, err
+					}
+				} else if recoveryDecision == "" && resp.State == sqlv1.TransactionState_TRANSACTION_STATE_PREPARED {
+					req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_ABORT
+					if err := stream.Send(req); err != nil {
+						return nil, err
+					}
+					resp, err = stream.Recv()
+					if err != nil {
+						return nil, err
+					}
+				}
+				if recoveryDecision == "COMMIT" && resp.State != sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED {
+					return nil, fmt.Errorf("worker transaction %q is not committed", req.TransactionId)
 				}
 				delete(wk, remote)
 				wkJSON, _ := json.Marshal(wk)
@@ -415,7 +438,7 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 			}
 		}
 		wkJSON, _ := json.Marshal(workersKeys)
-		_, err = recoveryDB.ExecContext(context.Background(), `REPLACE INTO ha_2pc_recovery(id, changeset, workers, sequence) VALUES(1, '', ?, ?)`, string(wkJSON), sequence)
+		_, err = recoveryDB.ExecContext(context.Background(), `REPLACE INTO ha_2pc_recovery(id, changeset, workers, sequence, decision) VALUES(1, '', ?, ?, '')`, string(wkJSON), sequence)
 		if err != nil {
 			return nil, fmt.Errorf("update 2pc recovery table: %w", err)
 		}
@@ -432,6 +455,9 @@ func NewTwoPhaseCommitPublisher(workersKeys map[string]string, timeout time.Dura
 func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 	if len(cs.Changes) == 0 {
 		return nil
+	}
+	if cs.TransactionID == "" {
+		cs.TransactionID = uuid.NewString()
 	}
 	req, err := changeSetToProto(cs)
 	if err != nil {
@@ -474,33 +500,9 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 		}
 	}
 
-	// commit
-	var commitedStreams []grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]
-	defer func() {
-		if err == nil {
-			return
-		}
-		req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_UNDO
-		for _, stream := range commitedStreams {
-			err = stream.Send(req)
-			if err != nil {
-				slog.Error("failed to send undo message", "error", err)
-				continue
-			}
-			resp, err := stream.Recv()
-			if err != nil {
-				slog.Error("failed to receive undo response", "error", err)
-				continue
-			}
-			if resp.Error != "" {
-				slog.Error("failed to undo transaction", "error", resp.Error)
-			}
-		}
-	}()
-
 	if p.recoveryDB != nil {
 		csJSON, _ := json.Marshal(cs)
-		_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = ? WHERE id = 1`, csJSON)
+		_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = ?, decision = 'COMMIT' WHERE id = 1`, csJSON)
 		if err != nil {
 			return fmt.Errorf("update ha_2pc_recovery table: %w", err)
 		}
@@ -521,11 +523,10 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 		if resp.Error != "" {
 			return fmt.Errorf("worker commit: %s", resp.Error)
 		}
-		commitedStreams = append(commitedStreams, stream)
 	}
 	p.sequence++
 	if p.recoveryDB != nil {
-		_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = '', sequence = ? WHERE id = 1`, p.sequence)
+		_, err := p.recoveryDB.ExecContext(context.Background(), `UPDATE ha_2pc_recovery SET changeset = '', decision = '', sequence = ? WHERE id = 1`, p.sequence)
 		if err != nil {
 			return fmt.Errorf("update ha_2pc_recovery table: %w", err)
 		}

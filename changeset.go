@@ -20,15 +20,15 @@ const controlTableName = "ha_stats"
 type ChangeSet struct {
 	interceptor   ChangeSetInterceptor
 	connProvider  ConnHooksProvider
-	strategy      sqlStrategy `json:"strategy"`
-	Node          string      `json:"node"`
-	ProcessID     int64       `json:"process_id"`
-	Filename      string      `json:"filename"`
-	Changes       []Change    `json:"changes"`
-	Timestamp     int64       `json:"timestamp_ns"`
-	TransactionID string      `json:"transaction_id,omitempty"`
-	Subject       string      `json:"-"`
-	StreamSeq     uint64      `json:"-"`
+	strategy      sqlStrategy
+	Node          string   `json:"node"`
+	ProcessID     int64    `json:"process_id"`
+	Filename      string   `json:"filename"`
+	Changes       []Change `json:"changes"`
+	Timestamp     int64    `json:"timestamp_ns"`
+	TransactionID string   `json:"transaction_id,omitempty"`
+	Subject       string   `json:"-"`
+	StreamSeq     uint64   `json:"-"`
 }
 
 type sqlStrategy interface {
@@ -114,7 +114,7 @@ func (cs *ChangeSet) Prepare(db *sql.DB) (conn *haconnect.ConnHooksEnabler, tx *
 		return
 	}
 	if cs.TransactionID != "" {
-		_, err = tx.ExecContext(ctx, `INSERT INTO ha_2pc_transactions(transaction_id, state) VALUES (?, 'PREPARED')`, cs.TransactionID)
+		_, err = tx.ExecContext(ctx, `REPLACE INTO ha_2pc_transactions(transaction_id, state) VALUES (?, 'PREPARED')`, cs.TransactionID)
 		if err != nil {
 			return
 		}
@@ -442,7 +442,6 @@ func changeSetFromProto(req *sqlv1.ChangeSetRequest) *ChangeSet {
 	case "full":
 		cs.SetStrategy(fullIdentifyStrategy{})
 	}
-	cs.TransactionID = req.TransactionId
 	cs.Timestamp = req.TimestampNs
 	cs.Changes = make([]Change, len(req.Changes))
 	for i, item := range req.Changes {

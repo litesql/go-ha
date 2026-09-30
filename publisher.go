@@ -16,12 +16,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+
+	sqlv1 "github.com/litesql/go-ha/api/sql/v1"
+	haconnect "github.com/litesql/go-ha/connect"
 )
 
 var processID = time.Now().UnixNano()
@@ -393,12 +395,17 @@ func (p *TwoPhaseCommitPublisher) BindLocalDB(db *sql.DB) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.localDB = db
-	if _, err := db.ExecContext(context.Background(), `CREATE TABLE IF NOT EXISTS `+TwoPhaseCommitDecisionTable+` (
-		transaction_id TEXT PRIMARY KEY,
-		changeset BLOB NOT NULL,
-		workers BLOB NOT NULL
-	)`); err != nil {
-		return fmt.Errorf("create two-phase commit decision table: %w", err)
+	if _, err := db.ExecContext(context.Background(),
+		`CREATE TABLE IF NOT EXISTS `+TwoPhaseCommitDecisionTable+` (
+			transaction_id TEXT PRIMARY KEY,
+			changeset BLOB NOT NULL,
+			workers BLOB NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS `+haconnect.TwoPhaseCommitTransactionTable+` (
+			transaction_id TEXT PRIMARY KEY,
+			state TEXT NOT NULL
+		)`); err != nil {
+		return fmt.Errorf("create two-phase commit manager tables: %w", err)
 	}
 	return p.recoverLocalDecisions(db)
 }
@@ -484,7 +491,7 @@ func (tx *preparedTwoPhaseCommit) RecordCommitDecision(write TwoPhaseCommitDecis
 	if err != nil {
 		return err
 	}
-	err = write(context.Background(), `INSERT INTO `+TwoPhaseCommitDecisionTable+`(transaction_id, changeset, workers) VALUES(?, ?, ?)`, tx.req.TransactionId, changeset, workers)
+	err = write(context.Background(), `INSERT INTO `+TwoPhaseCommitDecisionTable+`(transaction_id, changeset, workers) VALUES(?, ?, ?)`, tx.req.TransactionId, string(changeset), string(workers))
 	if err == nil {
 		tx.recorded = true
 	}
@@ -713,7 +720,7 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 			err = fmt.Errorf("worker commit: %s", resp.Error)
 			return
 		}
-	}	
+	}
 
 	return nil
 }

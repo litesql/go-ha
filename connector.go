@@ -295,6 +295,44 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	if c.subscriber == nil {
 		c.subscriber = NewNoopSubscriber()
 	}
+
+	if c.grpcPort > 0 {
+		if _, ok := grpcServers[c.grpcPort]; !ok {
+			lis, err := net.Listen("tcp", fmt.Sprintf(":%d", c.grpcPort))
+			if err != nil {
+				return nil, fmt.Errorf("failed to start gRPC server: %w", err)
+			}
+			opts := make([]connect.HandlerOption, 0)
+			if c.grpcToken == "" {
+				slog.Warn("no gRPC token configured, the gRPC server will be unauthenticated. Do not use this configuration in production environments!")
+			} else {
+				authInterceptor := haconnect.NewAuthInterceptor(c.grpcToken)
+				opts = append(opts, connect.WithInterceptors(authInterceptor))
+			}
+			path, handler := ConnectHandler(opts...)
+			mux := http.NewServeMux()
+			mux.Handle(path, handler)
+			p := new(http.Protocols)
+			p.SetHTTP1(true)
+			p.SetUnencryptedHTTP2(true)
+			s := http.Server{
+				Handler:   mux,
+				Protocols: p,
+			}
+			slog.Info("HA gRPC/connect server listening", "addr", lis.Addr())
+			go func() {
+				if err := s.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					log.Fatalf("failed to serve grpc: %v", err)
+				}
+			}()
+			grpcServers[c.grpcPort] = &haconnect.Server{
+				Server: &s,
+			}
+		} else {
+			grpcServers[c.grpcPort].ReferenceCount++
+		}
+	}
+
 	if binder, ok := c.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
 		localDB := sql.OpenDB(&noHooksConnector{driver: c.driver, dsn: c.dsn})
 		if err := binder.BindLocalDB(localDB); err != nil {
@@ -357,43 +395,6 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 		if c.snapshotter != nil && c.snapshotter.DB() == nil {
 			c.snapshotter.SetDB(c.db)
-		}
-	}
-
-	if c.grpcPort > 0 {
-		if _, ok := grpcServers[c.grpcPort]; !ok {
-			lis, err := net.Listen("tcp", fmt.Sprintf(":%d", c.grpcPort))
-			if err != nil {
-				return nil, fmt.Errorf("failed to start gRPC server: %w", err)
-			}
-			opts := make([]connect.HandlerOption, 0)
-			if c.grpcToken == "" {
-				slog.Warn("no gRPC token configured, the gRPC server will be unauthenticated. Do not use this configuration in production environments!")
-			} else {
-				authInterceptor := haconnect.NewAuthInterceptor(c.grpcToken)
-				opts = append(opts, connect.WithInterceptors(authInterceptor))
-			}
-			path, handler := ConnectHandler(opts...)
-			mux := http.NewServeMux()
-			mux.Handle(path, handler)
-			p := new(http.Protocols)
-			p.SetHTTP1(true)
-			p.SetUnencryptedHTTP2(true)
-			s := http.Server{
-				Handler:   mux,
-				Protocols: p,
-			}
-			slog.Info("HA gRPC/connect server listening", "addr", lis.Addr())
-			go func() {
-				if err := s.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					log.Fatalf("failed to serve grpc: %v", err)
-				}
-			}()
-			grpcServers[c.grpcPort] = &haconnect.Server{
-				Server: &s,
-			}
-		} else {
-			grpcServers[c.grpcPort].ReferenceCount++
 		}
 	}
 

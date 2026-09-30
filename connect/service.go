@@ -19,6 +19,9 @@ import (
 	"github.com/litesql/go-ha/api/sql/v1/sqlv1connect"
 )
 
+// TwoPhaseCommitTransactionTable stores local commit transactions for idempotency.
+const TwoPhaseCommitTransactionTable = "ha_2pc_transactions"
+
 type Service struct {
 	sqlv1connect.UnimplementedDatabaseServiceHandler
 	DBProvider                    DBProvider
@@ -657,43 +660,6 @@ func (s *Service) ReplicationIDs(ctx context.Context, req *connect.Request[sqlv1
 	}), nil
 }
 
-var (
-	changeSetUndoSchemaInit   = make(map[string]struct{})
-	muChangeSetUndoSchemaInit sync.Mutex
-)
-
-// used on two phase commit recovery process
-func createChangeSetUndoTable(id string, hadb HADB) error {
-	muChangeSetUndoSchemaInit.Lock()
-	defer muChangeSetUndoSchemaInit.Unlock()
-
-	if _, ok := changeSetUndoSchemaInit[id]; ok {
-		return nil
-	}
-
-	conn, err := hadb.DB().Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get connection for changeset undo table: %w", err)
-	}
-	defer conn.Close()
-
-	err = hadb.DisableHooks(conn)
-	if err != nil {
-		return fmt.Errorf("failed to disable hooks for changeset undo table: %w", err)
-	}
-	defer hadb.EnableHooks(conn)
-
-	_, err = conn.ExecContext(context.Background(),
-		`CREATE TABLE IF NOT EXISTS ha_2pc_transactions(
-			transaction_id TEXT PRIMARY KEY,
-			state TEXT NOT NULL
-		)`)
-	if err != nil {
-		return fmt.Errorf("create changeset recovery table for %q: %w", id, err)
-	}
-	return nil
-}
-
 func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]) error {
 	var (
 		replicationID string
@@ -758,14 +724,11 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			}
 			hadb.Mutex().Lock()
 			defer hadb.Mutex().Unlock()
-			if err := createChangeSetUndoTable(replicationID, hadb); err != nil {
-				return err
-			}
 		}
 
 		if req.Type == sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_STATUS {
 			var state string
-			err := db.QueryRowContext(ctx, `SELECT state FROM ha_2pc_transactions WHERE transaction_id = ?`, req.TransactionId).Scan(&state)
+			err := db.QueryRowContext(ctx, `SELECT state FROM `+TwoPhaseCommitTransactionTable+` WHERE transaction_id = ?`, req.TransactionId).Scan(&state)
 			if errors.Is(err, sql.ErrNoRows) {
 				state = ""
 			} else if err != nil {
@@ -845,7 +808,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 		case sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_COMMIT:
 			if tx == nil {
 				var state string
-				if queryErr := db.QueryRowContext(ctx, `SELECT state FROM ha_2pc_transactions WHERE transaction_id = ?`, req.TransactionId).Scan(&state); queryErr == nil && state == "COMMITTED" {
+				if queryErr := db.QueryRowContext(ctx, `SELECT state FROM `+TwoPhaseCommitTransactionTable+` WHERE transaction_id = ?`, req.TransactionId).Scan(&state); queryErr == nil && state == "COMMITTED" {
 					if err := stream.Send(&sqlv1.ChangeSetResponse{TransactionId: req.TransactionId, State: sqlv1.TransactionState_TRANSACTION_STATE_COMMITTED}); err != nil {
 						return err
 					}
@@ -874,7 +837,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				continue
 			}
 			if tx != nil {
-				_, err = tx.ExecContext(ctx, `UPDATE ha_2pc_transactions SET state = 'COMMITTED' WHERE transaction_id = ?`, transactionID)
+				_, err = tx.ExecContext(ctx, `UPDATE `+TwoPhaseCommitTransactionTable+` SET state = 'COMMITTED' WHERE transaction_id = ?`, transactionID)
 				if err == nil {
 					err = tx.Commit()
 				}

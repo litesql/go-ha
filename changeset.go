@@ -114,7 +114,7 @@ func (cs *ChangeSet) Prepare(db *sql.DB) (conn *haconnect.ConnHooksEnabler, tx *
 		return
 	}
 	if cs.TransactionID != "" {
-		_, err = tx.ExecContext(ctx, `REPLACE INTO ha_2pc_transactions(transaction_id, state) VALUES (?, 'PREPARED')`, cs.TransactionID)
+		_, err = tx.ExecContext(ctx, `INSERT INTO `+haconnect.TwoPhaseCommitTransactionTable+`(transaction_id, state) VALUES (?, 'PREPARED')`, cs.TransactionID)
 		if err != nil {
 			return
 		}

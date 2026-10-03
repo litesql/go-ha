@@ -398,8 +398,8 @@ func (p *TwoPhaseCommitPublisher) BindLocalDB(db *sql.DB) error {
 	if _, err := db.ExecContext(context.Background(),
 		`CREATE TABLE IF NOT EXISTS `+TwoPhaseCommitDecisionTable+` (
 			transaction_id TEXT PRIMARY KEY,
-			changeset BLOB NOT NULL,
-			workers BLOB NOT NULL
+			changeset JSONB NOT NULL,
+			workers JSONB NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS `+haconnect.TwoPhaseCommitTransactionTable+` (
 			transaction_id TEXT PRIMARY KEY,

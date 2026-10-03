@@ -569,6 +569,56 @@ func TestDDLStatements(t *testing.T) {
 			hasError: false,
 			wantDDL:  false,
 		},
+		"savepoint": {
+			sql:      "SAVEPOINT sp1",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"release savepoint": {
+			sql:      "RELEASE sp1",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"begin": {
+			sql:      "BEGIN",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"commit": {
+			sql:      "COMMIT",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"rollback": {
+			sql:      "ROLLBACK",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"rollback to savepoint": {
+			sql:      "ROLLBACK TO savepoint sp1",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"insert": {
+			sql:      "INSERT INTO user (name) VALUES ('John')",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"update": {
+			sql:      "UPDATE user SET name = 'Jane' WHERE id = 1",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"delete": {
+			sql:      "DELETE FROM user WHERE id = 1",
+			hasError: false,
+			wantDDL:  false,
+		},
+		"explain": {
+			sql:      "EXPLAIN QUERY PLAN SELECT * FROM user",
+			hasError: false,
+			wantDDL:  false,
+		},
 	}
 
 	for name, tc := range tests {

@@ -333,14 +333,6 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		}
 	}
 
-	if binder, ok := c.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
-		localDB := sql.OpenDB(&noHooksConnector{driver: c.driver, dsn: c.dsn})
-		if err := binder.BindLocalDB(localDB); err != nil {
-			localDB.Close()
-			return nil, fmt.Errorf("bind two-phase commit local database: %w", err)
-		}
-		c.closers = append(c.closers, localDB)
-	}
 	if c.autoStart {
 		if c.waitFor == nil {
 			c.db = sql.OpenDB(&c)
@@ -357,6 +349,14 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 					c.snapshotter.SetDB(c.db)
 				}
 				c.snapshotter.Start()
+			}
+			if binder, ok := c.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
+				localDB := sql.OpenDB(&noHooksConnector{driver: c.driver, dsn: c.dsn})
+				if err := binder.BindLocalDB(localDB); err != nil {
+					localDB.Close()
+					return nil, fmt.Errorf("bind two-phase commit local database: %w", err)
+				}
+				c.closers = append(c.closers, localDB)
 			}
 		} else {
 			if !c.forcePublishBeforeStart {
@@ -384,9 +384,22 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 					}
 					c.snapshotter.Start()
 				}
+				if binder, ok := c.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
+					localDB := sql.OpenDB(&noHooksConnector{driver: c.driver, dsn: c.dsn})
+					if err := binder.BindLocalDB(localDB); err != nil {
+						localDB.Close()
+						panic(fmt.Errorf("bind two-phase commit local database: %w", err))
+					}
+					c.closers = append(c.closers, localDB)
+				}
 			}()
 		}
 	} else {
+		if !c.forcePublishBeforeStart {
+			c.publisher = &delayedStartPublisher{
+				pub: c.publisher,
+			}
+		}
 		c.db = sql.OpenDB(&c)
 		c.closers = append(c.closers, c.db)
 
@@ -427,6 +440,14 @@ func (c *Connector) Start(db *sql.DB) error {
 	}
 	if delayedStartPub, ok := c.publisher.(*delayedStartPublisher); ok {
 		c.publisher = delayedStartPub.pub
+	}
+	if binder, ok := c.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
+		localDB := sql.OpenDB(&noHooksConnector{driver: c.driver, dsn: c.dsn})
+		if err := binder.BindLocalDB(localDB); err != nil {
+			localDB.Close()
+			return fmt.Errorf("bind two-phase commit local database: %w", err)
+		}
+		c.closers = append(c.closers, localDB)
 	}
 	var err error
 

@@ -210,6 +210,7 @@ go-ha provides several driver implementations:
 
 - **[HA](https://github.com/litesql/ha)**: Highly available leaderless SQLite cluster with HTTP and PostgreSQL Wire Protocol
 - **[PocketBase HA](https://github.com/litesql/pocketbase-ha)**: Highly available leaderless PocketBase cluster
+- **[PocketBase HC](https://github.com/litesql/pocketbase-hc)**: Strictly consistent PocketBase cluster
 - **[sqlc-http](https://github.com/walterwanderley/sqlc-http)**: Generate net/http Go server from SQL
 
 ## Contributing

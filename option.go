@@ -349,6 +349,24 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 				return "", nil, fmt.Errorf("invalid natsPort: %w", err)
 			}
 			natsConfig.Port = port
+		case "natsWebSocketPort":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid natsWebSocketPort: %w", err)
+			}
+			natsConfig.WebSocketPort = port
+		case "natsWebSocketNoTLS":
+			noTLS, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid natsWebSocketNoTLS: %w", err)
+			}
+			natsConfig.WebSocketNoTLS = noTLS
+		case "natsEnableLogs":
+			enableLogs, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid natsEnableLogs: %w", err)
+			}
+			natsConfig.EnableLogs = enableLogs
 		case "natsConfigFile":
 			natsConfig.File = value
 		case "natsStoreDir":

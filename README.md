@@ -14,6 +14,7 @@ A Go `database/sql` base driver providing high availability for SQLite databases
 - **Cluster Modes**:
   - **Leaderless**: Read/write from any node with last-writer-wins resolution.
   - **Leader-based**: Redirect writes to a leader to prevent conflicts.
+  - **Two-phase Commit**: Read and write from any node using a 2PC strategy over gRPC streams to guarantee consistency across the cluster.
 - **NATS Integration**: Choose between embedded or external NATS servers.
 - **Seamless Integration**: Drop-in replacement for existing Go `database/sql` usage.
 - **gRPC Support**: Expose database operations via gRPC for remote access the sqlite database.
@@ -175,6 +176,9 @@ go-ha provides several driver implementations:
 | natsName               | Name for embedded NATS server.                                              |                 |
 | natsPort               | Port for embedded NATS server.                                              | 4222            |
 | natsStoreDir           | Data directory for embedded NATS server.                                    |                 |
+| natsWebSocketPort      | WebSocket Port for embedded NATS server. |                |
+| natsWebSocketNoTLS     | Disable WebSocket TLS for embedded NATS | false  |
+| natsEnableLogs         | Enable embedded Nats logs | false |
 | publisherTimeout       | Timeout for publishing replication events.                                  | 15s             |
 | replicationStream      | Name of the NATS stream for replication.                                    |                 |
 | replicationURL         | NATS server URL for replication.                                            |                 |

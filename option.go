@@ -121,12 +121,6 @@ func WithAsyncPublisher() Option {
 	}
 }
 
-func WithAsyncPublisherOutboxDir(dir string) Option {
-	return func(c *Connector) {
-		c.asyncPublisherOutboxDir = dir
-	}
-}
-
 func WithSnapshotInterval(interval time.Duration) Option {
 	return func(c *Connector) {
 		c.snapshotInterval = interval
@@ -313,8 +307,6 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 			if b {
 				opts = append(opts, WithAsyncPublisher())
 			}
-		case "asyncPublisherOutboxDir":
-			opts = append(opts, WithAsyncPublisherOutboxDir(value))
 		case "replID", "replicationID":
 			opts = append(opts, WithReplicationID(value))
 		case "clusterSize":

@@ -1,7 +1,6 @@
 # go-ha
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/litesql/go-ha.svg)](https://pkg.go.dev/github.com/litesql/go-ha)
-[![Go Report Card](https://goreportcard.com/badge/github.com/litesql/go-ha)](https://goreportcard.com/report/github.com/litesql/go-ha)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A Go `database/sql` base driver providing high availability for SQLite databases through NATS-based replication.
@@ -155,9 +154,8 @@ go-ha provides several driver implementations:
 
 | DSN Parameter          | Description                                                                 | Default         |
 |------------------------|-----------------------------------------------------------------------------|-----------------|
-| asyncPublisher         | Enables asynchronous publishing of replication events.                      | false           |
-| asyncPublisherOutboxDir| Directory to store outbox files for asynchronous publishing.                |                 |
-| autoStart              | Automatically starts publisher, subscriber and snapshotter on initialization.         | true            |
+| asyncPublisher         | Enables asynchronous publishing of replication events using outbox pattern. | false           |
+| autoStart              | Automatically starts publisher, subscriber and snapshotter on initialization.| true            |
 | forcePublishBeforeStart | Force publish data to stream before complete the start proccess            | false |
 | replicationID          | Unique ID for this replication instance.                                    | [database filename] |
 | deliverPolicy          | Delivery policy for replication events (`all`, `last`, etc.).              | all             |

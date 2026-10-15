@@ -43,7 +43,6 @@ type Connector struct {
 	deliverPolicy           string
 	publisherTimeout        time.Duration
 	asyncPublisher          bool
-	asyncPublisherOutboxDir string
 	snapshotInterval        time.Duration
 	disableDDLSync          bool
 	replicationID           string

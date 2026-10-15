@@ -145,98 +145,13 @@ func (p *NATSPublisher) Sequence() uint64 {
 	return p.sequence
 }
 
-type AsyncNATSPublisher struct {
-	*NATSPublisher
-	db       *sql.DB
-	sequence uint64
-	mu       sync.Mutex
-	close    chan struct{}
-}
-
-func NewAsyncNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig, db *sql.DB) (*AsyncNATSPublisher, error) {
+func NewAsyncNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig) (*OutboxPublisher, error) {
 	pub, err := NewNATSPublisher(nc, subject, timeout, streamConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = db.Exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS ha_outbox(subject TEXT, changeset BLOB, timestamp DATETIME);`)
-	if err != nil {
-		return nil, fmt.Errorf("create outbox table: %w", err)
-	}
-
-	asyncPub := &AsyncNATSPublisher{
-		NATSPublisher: pub,
-		close:         make(chan struct{}),
-		db:            db,
-	}
-	go asyncPub.start()
-
-	return asyncPub, nil
-}
-
-func (p *AsyncNATSPublisher) Publish(cs *ChangeSet) error {
-	cs.ProcessID = processID
-	data, err := json.Marshal(cs)
-	if err != nil {
-		return err
-	}
-	p.mu.Lock()
-	_, err = p.db.Exec("INSERT INTO ha_outbox(subject, changeset, timestamp) VALUES(?, ?, ?)", p.subject, data, time.Now())
-	p.mu.Unlock()
-	return err
-}
-
-func (p *AsyncNATSPublisher) Sequence() uint64 {
-	return p.sequence
-}
-
-func (p *AsyncNATSPublisher) Close() error {
-	if p.close != nil {
-		close(p.close)
-	}
-	return nil
-}
-
-func (p *AsyncNATSPublisher) start() {
-	for {
-		select {
-		case <-p.close:
-			return
-		default:
-			p.relay()
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-}
-
-func (p *AsyncNATSPublisher) relay() {
-	var (
-		id        int
-		changeset []byte
-	)
-	err := p.db.QueryRow("SELECT rowid, changeset FROM ha_outbox WHERE subject = ? ORDER BY timestamp, rowid LIMIT 1", p.subject).Scan(&id, &changeset)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			slog.Error("async publisher relay query outbox", "error", err)
-		}
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
-	defer cancel()
-	pubAck, err := p.js.Publish(ctx, p.subject, changeset)
-	if err != nil {
-		slog.Error("async publisher relay publish", "error", err)
-		time.Sleep(5 * time.Second)
-		return
-	}
-	p.sequence = pubAck.Sequence
-	slog.Debug("published replication message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
-	p.mu.Lock()
-	_, err = p.db.Exec("DELETE FROM ha_outbox WHERE rowid = ?", id)
-	p.mu.Unlock()
-	if err != nil {
-		slog.Error("async publisher relay remove from outbox", "error", err)
-	}
+	return NewOutboxPublisher(pub, subject), nil
 }
 
 type DBPublisher struct {
@@ -772,6 +687,160 @@ func (c grpcCredentials) GetRequestMetadata(ctx context.Context, in ...string) (
 func (c grpcCredentials) RequireTransportSecurity() bool {
 	return false
 }
+
+type OutboxPublisher struct {
+	publisher Publisher
+	subject   string
+	localDB   *sql.DB
+	close     chan struct{}
+	once      sync.Once
+}
+
+// OutboxTable stores local changeset for async publishing.
+const OutboxTable = "ha_outbox"
+
+type preparedOutboxCommit struct {
+	cs        *ChangeSet
+	publisher *OutboxPublisher
+}
+
+func NewOutboxPublisher(publisher Publisher, subject string) *OutboxPublisher {
+	pub := &OutboxPublisher{
+		publisher: publisher,
+		subject:   subject,
+	}
+	go pub.start()
+	return pub
+}
+
+// BindLocalDB configures the origin database used to persist outbox records.
+func (p *OutboxPublisher) BindLocalDB(db *sql.DB) error {
+	if db == nil {
+		return errors.New("local database is required for outbox publisher")
+	}
+	if _, err := db.ExecContext(context.Background(),
+		`CREATE TABLE IF NOT EXISTS `+OutboxTable+` (
+			subject TEXT, 
+			changeset JSONB, 
+			timestamp DATETIME
+		)`); err != nil {
+		return fmt.Errorf("create outbox table: %w", err)
+	}
+	p.localDB = db
+	return nil
+}
+
+func (p *OutboxPublisher) PrepareTwoPhaseCommit(cs *ChangeSet) (PreparedTwoPhaseCommit, error) {
+	if len(cs.Changes) == 0 {
+		return nil, errors.New("cannot prepare an empty changeset")
+	}
+	cs.ProcessID = processID
+	if cs.Timestamp == 0 {
+		cs.Timestamp = time.Now().UnixNano()
+	}
+
+	return &preparedOutboxCommit{
+		cs:        cs,
+		publisher: p,
+	}, nil
+}
+
+func (p *OutboxPublisher) Publish(cs *ChangeSet) error {
+	return nil
+}
+
+func (p *OutboxPublisher) Sequence() uint64 {
+	return p.publisher.Sequence()
+}
+
+func (p *OutboxPublisher) Close() error {
+	if p.close != nil {
+		close(p.close)
+	}
+	return nil
+}
+
+func (p *OutboxPublisher) start() {
+	for {
+		select {
+		case <-p.close:
+			return
+		default:
+			if p.localDB != nil {
+				p.relay()
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+func (p *OutboxPublisher) relay() {
+	var (
+		id        int
+		changeset []byte
+	)
+	err := p.localDB.QueryRow("SELECT rowid, changeset FROM "+OutboxTable+" WHERE subject = ? ORDER BY timestamp, rowid LIMIT 1", p.subject).Scan(&id, &changeset)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("outbox publisher relay query", "error", err)
+		}
+		return
+	}
+
+	var cs ChangeSet
+	err = json.Unmarshal(changeset, &cs)
+	if err != nil {
+		slog.Error("outbox publisher relay unmarshal", "error", err)
+		return
+	}
+	err = p.publisher.Publish(&cs)
+	if err != nil {
+		slog.Error("outbox publisher relay publish", "error", err)
+		time.Sleep(5 * time.Second)
+		return
+	}
+
+	_, err = p.localDB.Exec("DELETE FROM "+OutboxTable+" WHERE rowid = ?", id)
+	if err != nil {
+		slog.Error("async publisher relay remove from outbox", "error", err)
+	}
+}
+
+func (tx *preparedOutboxCommit) RecordCommitDecision(write TwoPhaseCommitDecisionWriter) error {
+	if write == nil {
+		return errors.New("outbox writer is required")
+	}
+	changeset, err := json.Marshal(tx.cs)
+	if err != nil {
+		return err
+	}
+
+	tx.publisher.once.Do(func() {
+		err := write(context.Background(), `CREATE TABLE IF NOT EXISTS `+OutboxTable+` (
+			subject TEXT, 
+			changeset JSONB, 
+			timestamp DATETIME
+		)`)
+		if err != nil {
+			slog.Error("outbox publisher create table", "error", err)
+		}
+	})
+	return write(context.Background(), `INSERT INTO `+OutboxTable+`(subject, changeset, timestamp) VALUES(?, ?, ?)`, tx.publisher.subject, string(changeset), time.Now())
+}
+
+func (tx *preparedOutboxCommit) Commit() error {
+	return nil
+}
+
+func (tx *preparedOutboxCommit) Abort() error {
+	return nil
+}
+
+func (tx *preparedOutboxCommit) ResolveCommit() (bool, error) {
+	return true, nil
+}
+
+func (tx *preparedOutboxCommit) Close() {}
 
 type CompositePublisher struct {
 	publishers []Publisher

@@ -189,18 +189,12 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			Retention: jetstream.LimitsPolicy,
 		}
 		if c.asyncPublisher {
-			db := sql.OpenDB(&noHooksConnector{
-				driver: drv,
-				dsn:    "file:" + filepath.Join(c.asyncPublisherOutboxDir, strings.TrimSuffix(c.replicationID, ".db")+"_outbox.db"),
-			})
-
-			asyncPublisher, err := NewAsyncNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig, db)
+			asyncPublisher, err := NewAsyncNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start async NATS publisher: %w", err)
 			}
 			c.publisher = asyncPublisher
 			c.closers = append(c.closers, asyncPublisher)
-			c.closers = append(c.closers, db)
 		} else {
 			c.publisher, err = NewNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
 			if err != nil {

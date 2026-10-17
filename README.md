@@ -3,7 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/litesql/go-ha.svg)](https://pkg.go.dev/github.com/litesql/go-ha)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Go `database/sql` base driver providing high availability for SQLite databases through NATS-based replication.
+A Go `database/sql` base driver providing high availability for SQLite databases through NATS-based (or kafka using [https://github.com/litesql/go-kafka-ha](https://github.com/litesql/go-kafka-ha)) replication.
 
 ## Features
 

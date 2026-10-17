@@ -9,7 +9,7 @@ require (
 	github.com/nats-io/graft v0.0.0-20260325174230-f9e6710ae36e
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.54.0
-	github.com/rqlite/sql v0.0.0-20261009033234-4555bb784427
+	github.com/rqlite/sql v0.0.0-20261016220845-5c0832fea6e1
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 )

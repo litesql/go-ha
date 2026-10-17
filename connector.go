@@ -187,18 +187,9 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			Discard:   jetstream.DiscardOld,
 			Retention: jetstream.LimitsPolicy,
 		}
-		if c.asyncPublisher {
-			asyncPublisher, err := NewAsyncNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
-			if err != nil {
-				return nil, fmt.Errorf("failed to start async NATS publisher: %w", err)
-			}
-			c.publisher = asyncPublisher
-			c.closers = append(c.closers, asyncPublisher)
-		} else {
-			c.publisher, err = NewNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
-			if err != nil {
-				return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
-			}
+		c.publisher, err = NewNATSPublisher(natsConn, subject, c.publisherTimeout, &streamConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start NATS publisher: %w", err)
 		}
 	}
 
@@ -284,6 +275,12 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	}
 	if c.publisher == nil {
 		c.publisher = NewNoopPublisher()
+	} else {
+		if c.asyncPublisher {
+			asyncPublisher := NewOutboxPublisher(c.publisher, subject)
+			c.publisher = asyncPublisher
+			c.closers = append(c.closers, asyncPublisher)
+		}
 	}
 	if c.subscriber == nil {
 		c.subscriber = NewNoopSubscriber()

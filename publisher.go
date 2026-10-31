@@ -2,8 +2,10 @@ package ha
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,7 +135,8 @@ func (p *NATSPublisher) Publish(cs *ChangeSet) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
-	pubAck, err := p.js.Publish(ctx, p.subject, data)
+	messageID := sha256.Sum256(data)
+	pubAck, err := p.js.Publish(ctx, p.subject, data, jetstream.WithMsgID(hex.EncodeToString(messageID[:])))
 	if err != nil {
 		return err
 	}

@@ -25,6 +25,8 @@ A Go `database/sql` base driver providing high availability for SQLite databases
 
 go-ha enables high availability for SQLite by replicating changes across multiple nodes using NATS as the messaging backbone. Each node maintains a local SQLite database and publishes changes to a NATS stream. Other nodes subscribe to this stream and apply the changes, ensuring data consistency.
 
+The NATS publisher assigns a content-derived message ID to each changeset so JetStream can deduplicate identical publications within the stream's duplicate window. This does not deduplicate semantically equivalent changesets with different serialized content.
+
 ## Comparison with SQLite Session Extension
 
 go-ha provides a modern alternative to [SQLite's session extension](https://sqlite.org/sessionintro.html) with enhanced capabilities:
@@ -248,6 +250,16 @@ The connector records replication publish/apply and snapshot counts and duration
 - **Conflicts in leaderless mode**: Implement a custom `ChangeSetInterceptor` for complex conflict resolution.
 - **Slow synchronization**: Check snapshotter configuration and network latency.
 - **gRPC connection errors**: Verify `grpcPort` and `grpcToken` settings.
+
+### Resilience tests
+
+The integration resilience tests start an in-process JetStream server and use temporary SQLite databases; they do not require external NATS or Docker:
+
+```bash
+go test ./... -run '^TestResilience' -count=1
+```
+
+They cover leader failover, NATS server interruption and reconnection, duplicate publication deduplication, node restart, and replay of changesets published while a subscriber is offline.
 
 
 ## Projects Using go-ha

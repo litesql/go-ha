@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Option func(*Connector)
@@ -226,6 +228,16 @@ func WithProxiedDB(db *sql.DB) Option {
 func WithProxiedPositionProvider(provider ProxiedPositionProvider) Option {
 	return func(c *Connector) {
 		c.proxiedPositionProvider = provider
+	}
+}
+
+// WithOpenTelemetry enables instrumentation using the supplied providers.
+// A nil provider uses the corresponding global OpenTelemetry provider.
+func WithOpenTelemetry(meterProvider metric.MeterProvider, tracerProvider trace.TracerProvider) Option {
+	return func(c *Connector) {
+		c.otelEnabled = true
+		c.otelMeterProvider = meterProvider
+		c.otelTracerProvider = tracerProvider
 	}
 }
 

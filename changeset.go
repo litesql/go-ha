@@ -21,14 +21,15 @@ type ChangeSet struct {
 	interceptor   ChangeSetInterceptor
 	connProvider  ConnHooksProvider
 	strategy      sqlStrategy
-	Node          string   `json:"node"`
-	ProcessID     int64    `json:"process_id"`
-	Filename      string   `json:"filename"`
-	Changes       []Change `json:"changes"`
-	Timestamp     int64    `json:"timestamp_ns"`
-	TransactionID string   `json:"transaction_id,omitempty"`
-	Subject       string   `json:"-"`
-	StreamSeq     uint64   `json:"-"`
+	Node          string            `json:"node"`
+	ProcessID     int64             `json:"process_id"`
+	Filename      string            `json:"filename"`
+	Changes       []Change          `json:"changes"`
+	TraceContext  map[string]string `json:"trace_context,omitempty"`
+	Timestamp     int64             `json:"timestamp_ns"`
+	TransactionID string            `json:"transaction_id,omitempty"`
+	Subject       string            `json:"-"`
+	StreamSeq     uint64            `json:"-"`
 }
 
 type sqlStrategy interface {

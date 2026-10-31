@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,7 +97,7 @@ type NATSPublisher struct {
 	nc       *nats.Conn
 	js       jetstream.JetStream
 	timeout  time.Duration
-	sequence uint64
+	sequence atomic.Uint64
 	subject  string
 }
 
@@ -136,13 +137,17 @@ func (p *NATSPublisher) Publish(cs *ChangeSet) error {
 	if err != nil {
 		return err
 	}
-	p.sequence = pubAck.Sequence
+	for sequence := p.sequence.Load(); sequence < pubAck.Sequence; sequence = p.sequence.Load() {
+		if p.sequence.CompareAndSwap(sequence, pubAck.Sequence) {
+			break
+		}
+	}
 	slog.Debug("published replication message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	return nil
 }
 
 func (p *NATSPublisher) Sequence() uint64 {
-	return p.sequence
+	return p.sequence.Load()
 }
 
 func NewAsyncNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig) (*OutboxPublisher, error) {

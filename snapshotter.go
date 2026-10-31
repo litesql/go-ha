@@ -14,6 +14,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type SequenceProvider interface {
@@ -22,6 +25,10 @@ type SequenceProvider interface {
 
 type NoopSnapshotter struct {
 	seq uint64
+}
+
+func (s *NoopSnapshotter) LatestSnapshotTime() time.Time {
+	return time.Time{}
 }
 
 func (s *NoopSnapshotter) DB() *sql.DB {
@@ -54,8 +61,12 @@ type NATSSnapshotter struct {
 	seqProvider       SequenceProvider
 	objectName        string
 	latestSnapshotSeq uint64
+	latestSnapshotAt  time.Time
 	db                *sql.DB
 	interval          time.Duration
+	telemetry         *openTelemetry
+	nodeName          string
+	replicationID     string
 	mu                sync.Mutex
 }
 
@@ -89,6 +100,9 @@ func NewNATSSnapshotter(ctx context.Context, nc *nats.Conn, replicas int, stream
 		interval:    interval,
 	}
 	s.latestSnapshotSeq, _ = s.LatestSnapshotSequence(ctx)
+	if info, err := objectStore.GetInfo(ctx, objectName); err == nil {
+		s.latestSnapshotAt = info.ModTime
+	}
 	return s, nil
 }
 
@@ -98,6 +112,12 @@ func (s *NATSSnapshotter) DB() *sql.DB {
 
 func (s *NATSSnapshotter) SetDB(db *sql.DB) {
 	s.db = db
+}
+
+func (s *NATSSnapshotter) LatestSnapshotTime() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.latestSnapshotAt
 }
 
 func (s *NATSSnapshotter) Start() {
@@ -127,6 +147,21 @@ func (s *NATSSnapshotter) Start() {
 }
 
 func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context) (sequence uint64, err error) {
+	var started time.Time
+	var span trace.Span
+	if s.telemetry != nil {
+		ctx, span = s.telemetry.tracer.Start(ctx, "go_ha.snapshot.create")
+		started = time.Now()
+		defer func() {
+			s.telemetry.recordSnapshot(ctx, started, sequence, err, s.nodeName, s.replicationID)
+			span.SetAttributes(attribute.Int64("snapshot.sequence", sequenceToInt64(sequence)))
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
+			span.End()
+		}()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sequence = s.seqProvider.LatestSeq()
@@ -167,6 +202,7 @@ func (s *NATSSnapshotter) TakeSnapshot(ctx context.Context) (sequence uint64, er
 			errReaderCh <- err
 		} else {
 			s.latestSnapshotSeq = sequence
+			s.latestSnapshotAt = info.ModTime
 			slog.Debug("snapshot stored", "bucket", info.Bucket, "name", info.Name, "size", info.Size, "modTime", info.ModTime)
 			errReaderCh <- nil
 		}

@@ -17,11 +17,16 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	haconnect "github.com/litesql/go-ha/connect"
 )
@@ -51,6 +56,13 @@ type Connector struct {
 	forcePublishBeforeStart bool
 	clusterSize             int
 	waitFor                 chan struct{}
+	natsConn                *nats.Conn
+	replicationSubject      string
+	started                 atomic.Bool
+	otelEnabled             bool
+	otelMeterProvider       metric.MeterProvider
+	otelTracerProvider      trace.TracerProvider
+	telemetry               *openTelemetry
 
 	publisher   Publisher
 	subscriber  Subscriber
@@ -114,6 +126,14 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			nats.MaxReconnects(-1),
 		},
 	}
+	connectorCreated := false
+	defer func() {
+		if !connectorCreated {
+			if err := c.telemetry.close(); err != nil {
+				slog.Error("failed to unregister OpenTelemetry metrics", "error", err)
+			}
+		}
+	}()
 	for _, opt := range options {
 		opt(&c)
 	}
@@ -164,6 +184,8 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	if c.replicationID != "" {
 		subject = fmt.Sprintf("%s.%s", c.replicationStream, normalizeNatsIdentifier(c.replicationID))
 	}
+	c.natsConn = natsConn
+	c.replicationSubject = subject
 
 	if c.leaderElectionLocalTarget != "" {
 		if natsConn == nil {
@@ -285,6 +307,26 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	if c.subscriber == nil {
 		c.subscriber = NewNoopSubscriber()
 	}
+	if c.otelEnabled {
+		c.telemetry, err = newOpenTelemetry(&c)
+		if err != nil {
+			return nil, err
+		}
+		if subscriber, ok := c.subscriber.(*NATSSubscriber); ok {
+			subscriber.telemetry = c.telemetry
+		}
+		if snapshotter, ok := c.snapshotter.(*NATSSnapshotter); ok {
+			snapshotter.telemetry = c.telemetry
+			snapshotter.nodeName = c.name
+			snapshotter.replicationID = c.replicationID
+		}
+		c.publisher = &telemetryPublisher{
+			publisher: c.publisher,
+			telemetry: c.telemetry,
+			node:      c.name,
+			id:        c.replicationID,
+		}
+	}
 
 	if c.grpcPort > 0 {
 		if _, ok := grpcServers[c.grpcPort]; !ok {
@@ -334,6 +376,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			if err != nil {
 				return nil, fmt.Errorf("failed to start subscriber: %w", err)
 			}
+			c.started.Store(true)
 			if c.snapshotter != nil {
 				if c.snapshotter.DB() == nil {
 					c.snapshotter.SetDB(c.db)
@@ -367,6 +410,8 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 				err := c.subscriber.Start()
 				if err != nil {
 					slog.Error("failed to start subscriber", "error", err)
+				} else {
+					c.started.Store(true)
 				}
 				if c.snapshotter != nil {
 					if c.snapshotter.DB() == nil {
@@ -404,6 +449,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 	slog.Debug("go-ha connector created", "dsn", dsn, "replication_id", c.replicationID, "node_name", c.name, "pub", fmt.Sprintf("%T", c.publisher), "sub", fmt.Sprintf("%T", c.subscriber), "snapshotter", fmt.Sprintf("%T", c.snapshotter), "proxiedDB", c.proxiedDB != nil)
 
 	connectors[dsn] = &c
+	connectorCreated = true
 	return &c, nil
 }
 
@@ -439,12 +485,14 @@ func (c *Connector) Start(db *sql.DB) error {
 		}
 		c.closers = append(c.closers, localDB)
 	}
-	var err error
-
 	if db != nil {
 		c.subscriber.SetDB(db)
 	}
-	err = c.subscriber.Start()
+	err := c.subscriber.Start()
+	if err != nil {
+		return err
+	}
+	c.started.Store(true)
 
 	if c.snapshotter != nil {
 		if db != nil {
@@ -452,7 +500,7 @@ func (c *Connector) Start(db *sql.DB) error {
 		}
 		c.snapshotter.Start()
 	}
-	return err
+	return nil
 }
 
 func (c *Connector) Backup(ctx context.Context, writer io.Writer) error {
@@ -522,7 +570,23 @@ func (c *Connector) TakeSnapshot(ctx context.Context) (sequence uint64, err erro
 	if c.snapshotter == nil {
 		return 0, ErrSnapshotterNotConfigured
 	}
-	return c.snapshotter.TakeSnapshot(ctx)
+	if c.telemetry == nil {
+		return c.snapshotter.TakeSnapshot(ctx)
+	}
+	if _, ok := c.snapshotter.(*NATSSnapshotter); ok {
+		return c.snapshotter.TakeSnapshot(ctx)
+	}
+	ctx, span := c.telemetry.tracer.Start(ctx, "go_ha.snapshot.create")
+	defer span.End()
+	started := time.Now()
+	sequence, err = c.snapshotter.TakeSnapshot(ctx)
+	c.telemetry.recordSnapshot(ctx, started, sequence, err, c.name, c.replicationID)
+	span.SetAttributes(attribute.Int64("snapshot.sequence", sequenceToInt64(sequence)))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return sequence, err
 }
 
 func (c *Connector) LatestSnapshot(ctx context.Context) (uint64, io.ReadCloser, error) {
@@ -564,6 +628,9 @@ func (c *Connector) UndoByTime(ctx context.Context, duration time.Duration, filt
 }
 
 func (c *Connector) Close() {
+	if err := c.telemetry.close(); err != nil {
+		slog.Error("failed to unregister OpenTelemetry metrics", "error", err)
+	}
 	for _, closer := range c.closers {
 		closer.Close()
 	}

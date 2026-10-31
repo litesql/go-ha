@@ -15,6 +15,11 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	haconnect "github.com/litesql/go-ha/connect"
 )
@@ -65,6 +70,7 @@ func NewNoopSubscriber() *NoopSubscriber {
 
 type NATSSubscriber struct {
 	mu            sync.Mutex
+	seqMu         sync.RWMutex
 	started       bool
 	nc            *nats.Conn
 	js            jetstream.JetStream
@@ -78,6 +84,7 @@ type NATSSubscriber struct {
 	connProvider  ConnHooksProvider
 	interceptor   ChangeSetInterceptor
 	applyStrategy sqlStrategy
+	telemetry     *openTelemetry
 }
 
 type NATSSubscriberConfig struct {
@@ -164,6 +171,7 @@ func NewNATSSubscriber(cfg NATSSubscriberConfig) (*NATSSubscriber, error) {
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		FilterSubject: s.subject,
 		Durable:       s.durable,
+		Description:   s.node,
 		DeliverPolicy: deliverPolicy,
 		OptStartSeq:   startSeq,
 		OptStartTime:  startTime,
@@ -216,7 +224,9 @@ func (s *NATSSubscriber) Start() error {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	s.seqMu.Lock()
 	s.streamSeq = recv
+	s.seqMu.Unlock()
 	s.mu.Lock()
 	if s.started {
 		s.mu.Unlock()
@@ -234,6 +244,8 @@ func (s *NATSSubscriber) Start() error {
 }
 
 func (s *NATSSubscriber) LatestSeq() uint64 {
+	s.seqMu.RLock()
+	defer s.seqMu.RUnlock()
 	return s.streamSeq
 }
 
@@ -273,12 +285,12 @@ func (s *NATSSubscriber) DeliveredInfo(ctx context.Context, name string) (any, e
 }
 
 func (s *NATSSubscriber) HistoryBySeq(ctx context.Context, startSeq uint64) ([]haconnect.HistoryItem, error) {
-	max := s.streamSeq
+	max := s.LatestSeq()
 	if startSeq == 0 {
 		startSeq = max
 	}
 	if startSeq == 0 || startSeq > max {
-		return nil, fmt.Errorf("cannot retrieve history from %d transactions sequence, only %d transactions available in stream", startSeq, s.streamSeq)
+		return nil, fmt.Errorf("cannot retrieve history from %d transactions sequence, only %d transactions available in stream", startSeq, max)
 	}
 
 	slog.Debug("retrieve history", "subject", s.subject, "start_seq", startSeq)
@@ -296,7 +308,7 @@ func (s *NATSSubscriber) HistoryByTime(ctx context.Context, duration time.Durati
 	startTime := time.Now().Add(-duration)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	max := s.streamSeq
+	max := s.LatestSeq()
 	if duration <= 0 {
 		return nil, fmt.Errorf("duration must be greater than 0")
 	}
@@ -313,7 +325,7 @@ func (s *NATSSubscriber) HistoryByTime(ctx context.Context, duration time.Durati
 func (s *NATSSubscriber) UndoBySeq(ctx context.Context, startSeq uint64, filterType haconnect.UndoFilter, filterEntities map[string][]int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	max := s.streamSeq
+	max := s.LatestSeq()
 	if startSeq == 0 {
 		startSeq = max
 	}
@@ -335,7 +347,7 @@ func (s *NATSSubscriber) UndoByTime(ctx context.Context, duration time.Duration,
 	startTime := time.Now().Add(-duration)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	max := s.streamSeq
+	max := s.LatestSeq()
 	if duration <= 0 {
 		return fmt.Errorf("duration must be greater than 0")
 	}
@@ -581,7 +593,31 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		return
 	}
 	slog.Debug("received replication message", "subject", msg.Subject(), "node", cs.Node, "changes", len(cs.Changes), "seq", meta.Sequence.Stream)
+	var (
+		ctx     = context.Background()
+		span    trace.Span
+		started time.Time
+	)
+	if s.telemetry != nil {
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(cs.TraceContext))
+		ctx, span = s.telemetry.tracer.Start(ctx, "go_ha.replication.apply")
+		started = time.Now()
+		span.SetAttributes(
+			attribute.String("node", s.node),
+			attribute.String("replication_id", cs.Filename),
+			attribute.Int64("replication.sequence", int64(meta.Sequence.Stream)),
+			attribute.Int("changeset.change_count", len(cs.Changes)),
+		)
+	}
 	err = cs.Apply(s.db)
+	if s.telemetry != nil {
+		s.telemetry.recordApply(ctx, started, err, s.node, cs.Filename)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}
 	if err != nil {
 		slog.Error("failed to apply replication message", "error", err, "stream_seq", cs.StreamSeq)
 		return
@@ -594,7 +630,11 @@ func (s *NATSSubscriber) ack(msg jetstream.Msg, meta *jetstream.MsgMetadata) {
 	if err != nil {
 		slog.Error("failed to ack message", "error", err, "subject", msg.Subject(), "stream_seq", meta.Sequence.Stream)
 	}
-	s.streamSeq = meta.Sequence.Stream
+	s.seqMu.Lock()
+	if meta.Sequence.Stream > s.streamSeq {
+		s.streamSeq = meta.Sequence.Stream
+	}
+	s.seqMu.Unlock()
 }
 
 type DBSubscriber struct {

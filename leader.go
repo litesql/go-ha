@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/graft"
@@ -32,9 +33,14 @@ func (s *StaticLeader) Ready() chan struct{} {
 	return c
 }
 
+func (s *StaticLeader) IsReady() bool {
+	return true
+}
+
 type DynamicLeader struct {
 	node        *graft.Node
 	readyCh     chan struct{}
+	mu          sync.RWMutex
 	localTarget string
 	target      string
 }
@@ -44,23 +50,36 @@ func (d *DynamicLeader) Ready() chan struct{} {
 }
 
 func (d *DynamicLeader) IsLeader() bool {
-	return d.node.State() == graft.LEADER && d.target == d.localTarget
+	d.mu.RLock()
+	target := d.target
+	d.mu.RUnlock()
+	return d.node.State() == graft.LEADER && target == d.localTarget
 }
 
 func (d *DynamicLeader) RedirectTarget() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.target
 }
 
+func (d *DynamicLeader) IsReady() bool {
+	return d.RedirectTarget() != ""
+}
+
 func (d *DynamicLeader) setTarget(newTarget string) {
-	if d.target == "" && newTarget != "" {
+	d.mu.Lock()
+	oldTarget := d.target
+	d.target = newTarget
+	d.mu.Unlock()
+
+	if oldTarget == "" && newTarget != "" {
 		go func() {
 			d.readyCh <- struct{}{}
 		}()
 	}
-	if newTarget != d.target {
-		slog.Info("leader election has a new target", "old", d.target, "new", newTarget, "leader", d.node.Leader())
+	if newTarget != oldTarget {
+		slog.Info("leader election has a new target", "old", oldTarget, "new", newTarget, "leader", d.node.Leader())
 	}
-	d.target = newTarget
 }
 
 func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Conn, subject string, clusterSize int, replicas int, logFile string) (*DynamicLeader, error) {

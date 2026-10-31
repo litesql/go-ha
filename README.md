@@ -194,6 +194,52 @@ go-ha provides several driver implementations:
 - For high-throughput scenarios, consider leader-based clusters to avoid conflicts.
 - Monitor NATS stream size and adjust `streamMaxAge` to prevent unbounded growth.
 
+## Observability
+
+Mount the connector's handlers on an HTTP server managed by your application:
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/", connector.ObservabilityHandler())
+log.Fatal(http.ListenAndServe(":8080", mux))
+```
+
+The handler exposes:
+
+- `GET /healthz`: liveness and current cluster status.
+- `GET /readyz`: readiness; returns `503` until startup completes, the database responds to `Ping`, the configured NATS connection is connected, and a dynamic leader is known.
+- `GET /metrics`: Prometheus metrics for leadership, published/applied sequence, per-node unapplied messages, NATS connectivity, readiness, and the last snapshot timestamp.
+
+Replication lag is reported in messages. For JetStream consumers it includes both pending and delivered-but-unacknowledged messages; other subscriber implementations report the local published/applied sequence difference. The health responses include the current leader target, NATS status, sequence numbers, lag by consumer node, and the last snapshot time when the snapshotter exposes it. Snapshotters can expose that timestamp by implementing `LatestSnapshotTime() time.Time`.
+
+### Grafana dashboard
+
+An example dashboard that visualizes readiness, leader, NATS connectivity, replication lag/sequences, snapshot age, and observability errors is available at [examples/grafana/go-ha-dashboard.json](./examples/grafana/go-ha-dashboard.json). Add the application's `/metrics` endpoint to Prometheus, then import this JSON in Grafana and select the Prometheus data source. The dashboard includes replication ID and node filters.
+
+Example Prometheus scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: go-ha
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:8080"]
+```
+
+## OpenTelemetry
+
+OpenTelemetry instrumentation is optional. Configure the SDK and exporters in your application, then pass the providers to the connector:
+
+```go
+connector, err := ha.NewConnector(
+    dsn, driver, hooksFactory, backupFn,
+    ha.WithOpenTelemetry(meterProvider, tracerProvider),
+)
+```
+
+The connector records replication publish/apply and snapshot counts and durations, and emits spans for those operations and requests handled by `ObservabilityHandler`. When a global text-map propagator is configured, trace context is carried in replication changesets and extracted by subscribers. Observable metrics report leadership, readiness, NATS connectivity, published/applied sequence, per-node replication lag, the last snapshot timestamp, and collection errors. Passing a nil provider uses the corresponding global OpenTelemetry provider. The application owns provider/exporter shutdown; the connector unregisters its metric callback when closed. The Prometheus `/metrics` endpoint remains available independently.
+
+
 ## Troubleshooting
 
 ### Common Issues

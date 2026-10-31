@@ -82,7 +82,7 @@ func (d *DynamicLeader) setTarget(newTarget string) {
 	}
 }
 
-func startLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Conn, subject string, clusterSize int, replicas int, logFile string) (*DynamicLeader, error) {
+func StartLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Conn, subject string, clusterSize int, replicas int, logFile string) (*DynamicLeader, error) {
 	rpc, err := graft.NewNatsRpcFromConn(nc)
 	if err != nil {
 		return nil, err

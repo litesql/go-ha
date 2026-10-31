@@ -191,7 +191,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 		if natsConn == nil {
 			return nil, fmt.Errorf("no NATS connection available to start leader election")
 		}
-		leaderProvider, err := startLeaderElection(context.Background(),
+		leaderProvider, err := StartLeaderElection(context.Background(),
 			c.leaderElectionLocalTarget, natsConn, subject, c.clusterSize, c.replicas, filepath.Join(os.TempDir(), fmt.Sprintf("ha-election-%s.log", c.name)))
 		if err != nil {
 			return nil, fmt.Errorf("failed to start leader election: %w", err)

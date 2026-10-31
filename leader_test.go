@@ -30,7 +30,7 @@ func TestLeaderElectionBucketReplicas(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	_, err := startLeaderElection(ctx, "127.0.0.1:5000", nc, subject, clusterSize, replicas,
+	_, err := StartLeaderElection(ctx, "127.0.0.1:5000", nc, subject, clusterSize, replicas,
 		filepath.Join(t.TempDir(), "ha-election.log"))
 	if err != nil {
 		t.Fatalf("failed to start leader election: %v", err)

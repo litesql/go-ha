@@ -481,6 +481,14 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 			if err != nil {
 				return "", nil, fmt.Errorf("invalid 2pcTimeout: %w", err)
 			}
+		case "otel":
+			enableGlobalOtel, err := strconv.ParseBool(value)
+			if err != nil {
+				return "", nil, fmt.Errorf("invalid otel: %w", err)
+			}
+			if enableGlobalOtel {
+				opts = append(opts, WithOpenTelemetry(nil, nil))
+			}
 		default:
 			for _, v := range values[k] {
 				dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, v))

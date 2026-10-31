@@ -179,6 +179,7 @@ go-ha provides several driver implementations:
 | natsWebSocketPort      | WebSocket Port for embedded NATS server. |                |
 | natsWebSocketNoTLS     | Disable WebSocket TLS for embedded NATS | false  |
 | natsEnableLogs         | Enable embedded Nats logs | false |
+| otel                   | Enable OpenTelemetry with global providers | false |
 | publisherTimeout       | Timeout for publishing replication events.                                  | 15s             |
 | replicationStream      | Name of the NATS stream for replication.                                    |                 |
 | replicationURL         | NATS server URL for replication.                                            |                 |

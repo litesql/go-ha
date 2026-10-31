@@ -59,11 +59,11 @@ func TestOpenTelemetryInstruments(t *testing.T) {
 		node:      connector.name,
 		id:        connector.replicationID,
 	}
-	if err := publisher.Publish(&ChangeSet{Changes: []Change{{}}}); err != nil {
+	if err := publisher.Publish(context.TODO(), &ChangeSet{Changes: []Change{{}}}); err != nil {
 		t.Fatalf("publish changeset: %v", err)
 	}
 	changeset := &ChangeSet{Changes: []Change{{}}}
-	if err := publisher.Publish(changeset); err != nil {
+	if err := publisher.Publish(context.TODO(), changeset); err != nil {
 		t.Fatalf("publish changeset with trace context: %v", err)
 	}
 	if changeset.TraceContext["traceparent"] == "" {

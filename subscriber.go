@@ -609,7 +609,7 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 			attribute.Int("changeset.change_count", len(cs.Changes)),
 		)
 	}
-	err = cs.Apply(s.db)
+	err = cs.Apply(context.Background(), s.db)
 	if s.telemetry != nil {
 		s.telemetry.recordApply(ctx, started, err, s.node, cs.Filename)
 		if err != nil {

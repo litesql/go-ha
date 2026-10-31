@@ -83,7 +83,7 @@ type HADB interface {
 }
 
 type TwoPhaseCommitWorker interface {
-	Prepare(*sql.DB) (*ConnHooksEnabler, *sql.Tx, error)
+	Prepare(context.Context, *sql.DB) (*ConnHooksEnabler, *sql.Tx, error)
 	AfterCommit(conn *sql.Conn, err error) error
 	UndoLocal(*sql.DB) error
 }
@@ -782,7 +782,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 				conn.Close()
 				conn = nil
 			}
-			conn, tx, err = worker.Prepare(db)
+			conn, tx, err = worker.Prepare(ctx, db)
 			if err != nil {
 				if tx != nil {
 					err = errors.Join(err, tx.Rollback())
@@ -814,7 +814,7 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 					}
 					continue
 				}
-				conn, tx, err = worker.Prepare(db)
+				conn, tx, err = worker.Prepare(ctx, db)
 				if err != nil {
 					if tx != nil {
 						_ = tx.Rollback()

@@ -231,7 +231,7 @@ func LatestSnapshot(ctx context.Context, dsn string, options ...Option) (sequenc
 }
 
 type Publisher interface {
-	Publish(cs *ChangeSet) error
+	Publish(ctx context.Context, cs *ChangeSet) error
 	Sequence() uint64
 }
 

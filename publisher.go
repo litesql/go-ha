@@ -33,7 +33,7 @@ var processID = time.Now().UnixNano()
 
 type NoopPublisher struct{}
 
-func (p *NoopPublisher) Publish(cs *ChangeSet) error {
+func (p *NoopPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	return nil
 }
 
@@ -59,7 +59,7 @@ func NewWriterPublisher(w io.Writer, serializer ChangeSetSerializer) *WriterPubl
 	}
 }
 
-func (p *WriterPublisher) Publish(cs *ChangeSet) error {
+func (p *WriterPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	b, err := p.serializer(cs)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ type JSONPublisher struct {
 	writer io.Writer
 }
 
-func (p *JSONPublisher) Publish(cs *ChangeSet) error {
+func (p *JSONPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	b, err := json.Marshal(cs)
 	if err != nil {
 		return err
@@ -127,13 +127,13 @@ func NewNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, stre
 	}, nil
 }
 
-func (p *NATSPublisher) Publish(cs *ChangeSet) error {
+func (p *NATSPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	cs.ProcessID = processID
 	data, err := json.Marshal(cs)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 	messageID := sha256.Sum256(data)
 	pubAck, err := p.js.Publish(ctx, p.subject, data, jetstream.WithMsgID(hex.EncodeToString(messageID[:])))
@@ -180,7 +180,7 @@ func NewDBPublisher(db *sql.DB, maxAge time.Duration) (*DBPublisher, error) {
 	return p, nil
 }
 
-func (p *DBPublisher) Publish(cs *ChangeSet) error {
+func (p *DBPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	data, err := json.Marshal(cs)
 	if err != nil {
 		return err
@@ -272,15 +272,15 @@ type TwoPhaseCommitDecisionWriter func(context.Context, string, ...any) error
 
 // TwoPhaseCommitPreparer starts the remote prepare phase for an origin transaction.
 type TwoPhaseCommitPreparer interface {
-	PrepareTwoPhaseCommit(*ChangeSet) (PreparedTwoPhaseCommit, error)
+	PrepareTwoPhaseCommit(context.Context, *ChangeSet) (PreparedTwoPhaseCommit, error)
 }
 
 // PreparedTwoPhaseCommit finalizes or aborts a transaction after remote preparation.
 type PreparedTwoPhaseCommit interface {
-	RecordCommitDecision(TwoPhaseCommitDecisionWriter) error
-	Commit() error
+	RecordCommitDecision(context.Context, TwoPhaseCommitDecisionWriter) error
+	Commit(context.Context) error
 	Abort() error
-	ResolveCommit() (bool, error)
+	ResolveCommit(context.Context) (bool, error)
 	Close()
 }
 
@@ -330,21 +330,21 @@ func (p *TwoPhaseCommitPublisher) BindLocalDB(db *sql.DB) error {
 		)`); err != nil {
 		return fmt.Errorf("create two-phase commit manager tables: %w", err)
 	}
-	return p.recoverLocalDecisions(db)
+	return p.recoverLocalDecisions(context.Background(), db)
 }
 
 // RecoverTwoPhaseCommits replays durable local decisions before new transactions begin.
-func (p *TwoPhaseCommitPublisher) RecoverTwoPhaseCommits() error {
+func (p *TwoPhaseCommitPublisher) RecoverTwoPhaseCommits(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.localDB == nil {
 		return errors.New("two-phase commit publisher is not bound to its local database")
 	}
-	return p.recoverLocalDecisions(p.localDB)
+	return p.recoverLocalDecisions(ctx, p.localDB)
 }
 
 // PrepareTwoPhaseCommit prepares each configured remote participant.
-func (p *TwoPhaseCommitPublisher) PrepareTwoPhaseCommit(cs *ChangeSet) (PreparedTwoPhaseCommit, error) {
+func (p *TwoPhaseCommitPublisher) PrepareTwoPhaseCommit(ctx context.Context, cs *ChangeSet) (PreparedTwoPhaseCommit, error) {
 	if p.localDB == nil {
 		return nil, errors.New("two-phase commit publisher is not bound to its local database")
 	}
@@ -364,7 +364,7 @@ func (p *TwoPhaseCommitPublisher) PrepareTwoPhaseCommit(cs *ChangeSet) (Prepared
 		return nil, err
 	}
 	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	prepared := &preparedTwoPhaseCommit{
 		publisher: p,
 		req:       req,
@@ -399,7 +399,7 @@ func (p *TwoPhaseCommitPublisher) PrepareTwoPhaseCommit(cs *ChangeSet) (Prepared
 	return prepared, nil
 }
 
-func (tx *preparedTwoPhaseCommit) RecordCommitDecision(write TwoPhaseCommitDecisionWriter) error {
+func (tx *preparedTwoPhaseCommit) RecordCommitDecision(ctx context.Context, write TwoPhaseCommitDecisionWriter) error {
 	if write == nil {
 		return errors.New("decision writer is required")
 	}
@@ -414,14 +414,14 @@ func (tx *preparedTwoPhaseCommit) RecordCommitDecision(write TwoPhaseCommitDecis
 	if err != nil {
 		return err
 	}
-	err = write(context.Background(), `INSERT INTO `+TwoPhaseCommitDecisionTable+`(transaction_id, changeset, workers) VALUES(?, ?, ?)`, tx.req.TransactionId, string(changeset), string(workers))
+	err = write(ctx, `INSERT INTO `+TwoPhaseCommitDecisionTable+`(transaction_id, changeset, workers) VALUES(?, ?, ?)`, tx.req.TransactionId, string(changeset), string(workers))
 	if err == nil {
 		tx.recorded = true
 	}
 	return err
 }
 
-func (tx *preparedTwoPhaseCommit) Commit() error {
+func (tx *preparedTwoPhaseCommit) Commit(ctx context.Context) error {
 	if !tx.recorded {
 		tx.close()
 		return errors.New("commit decision was not recorded with the local transaction")
@@ -442,7 +442,7 @@ func (tx *preparedTwoPhaseCommit) Commit() error {
 			return fmt.Errorf("worker commit: %s", resp.Error)
 		}
 	}
-	if _, err := tx.publisher.localDB.ExecContext(context.Background(), `DELETE FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, tx.req.TransactionId); err != nil {
+	if _, err := tx.publisher.localDB.ExecContext(ctx, `DELETE FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, tx.req.TransactionId); err != nil {
 		tx.close()
 		return fmt.Errorf("delete completed two-phase commit decision: %w", err)
 	}
@@ -457,9 +457,9 @@ func (tx *preparedTwoPhaseCommit) Abort() error {
 	return err
 }
 
-func (tx *preparedTwoPhaseCommit) ResolveCommit() (bool, error) {
+func (tx *preparedTwoPhaseCommit) ResolveCommit(ctx context.Context) (bool, error) {
 	var exists int
-	err := tx.publisher.localDB.QueryRowContext(context.Background(), `SELECT 1 FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, tx.req.TransactionId).Scan(&exists)
+	err := tx.publisher.localDB.QueryRowContext(ctx, `SELECT 1 FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, tx.req.TransactionId).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, tx.Abort()
 	}
@@ -468,7 +468,7 @@ func (tx *preparedTwoPhaseCommit) ResolveCommit() (bool, error) {
 		return false, err
 	}
 	tx.recorded = true
-	return true, tx.Commit()
+	return true, tx.Commit(ctx)
 }
 
 func (tx *preparedTwoPhaseCommit) Close() {
@@ -500,8 +500,8 @@ func (tx *preparedTwoPhaseCommit) close() {
 	})
 }
 
-func (p *TwoPhaseCommitPublisher) recoverLocalDecisions(db *sql.DB) error {
-	rows, err := db.QueryContext(context.Background(), `SELECT transaction_id, changeset, workers FROM `+TwoPhaseCommitDecisionTable)
+func (p *TwoPhaseCommitPublisher) recoverLocalDecisions(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT transaction_id, changeset, workers FROM `+TwoPhaseCommitDecisionTable)
 	if err != nil {
 		return fmt.Errorf("read pending two-phase commit decisions: %w", err)
 	}
@@ -575,7 +575,7 @@ func (p *TwoPhaseCommitPublisher) recoverLocalDecisions(db *sql.DB) error {
 	return nil
 }
 
-func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
+func (p *TwoPhaseCommitPublisher) Publish(ctx context.Context, cs *ChangeSet) (err error) {
 	if len(cs.Changes) == 0 {
 		return nil
 	}
@@ -591,7 +591,7 @@ func (p *TwoPhaseCommitPublisher) Publish(cs *ChangeSet) (err error) {
 	}
 	req.Type = sqlv1.CangeSetRequestType_CHANGESET_REQUEST_TYPE_PREPARE
 
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
 	var streams []grpc.BidiStreamingClient[sqlv1.ChangeSetRequest, sqlv1.ChangeSetResponse]
@@ -738,7 +738,7 @@ func (p *OutboxPublisher) BindLocalDB(db *sql.DB) error {
 	return nil
 }
 
-func (p *OutboxPublisher) PrepareTwoPhaseCommit(cs *ChangeSet) (PreparedTwoPhaseCommit, error) {
+func (p *OutboxPublisher) PrepareTwoPhaseCommit(_ context.Context, cs *ChangeSet) (PreparedTwoPhaseCommit, error) {
 	if len(cs.Changes) == 0 {
 		return nil, errors.New("cannot prepare an empty changeset")
 	}
@@ -753,7 +753,7 @@ func (p *OutboxPublisher) PrepareTwoPhaseCommit(cs *ChangeSet) (PreparedTwoPhase
 	}, nil
 }
 
-func (p *OutboxPublisher) Publish(cs *ChangeSet) error {
+func (p *OutboxPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	return nil
 }
 
@@ -801,7 +801,7 @@ func (p *OutboxPublisher) relay() {
 		slog.Error("outbox publisher relay unmarshal", "error", err)
 		return
 	}
-	err = p.publisher.Publish(&cs)
+	err = p.publisher.Publish(context.Background(), &cs)
 	if err != nil {
 		slog.Error("outbox publisher relay publish", "error", err)
 		time.Sleep(5 * time.Second)
@@ -814,7 +814,7 @@ func (p *OutboxPublisher) relay() {
 	}
 }
 
-func (tx *preparedOutboxCommit) RecordCommitDecision(write TwoPhaseCommitDecisionWriter) error {
+func (tx *preparedOutboxCommit) RecordCommitDecision(ctx context.Context, write TwoPhaseCommitDecisionWriter) error {
 	if write == nil {
 		return errors.New("outbox writer is required")
 	}
@@ -824,7 +824,7 @@ func (tx *preparedOutboxCommit) RecordCommitDecision(write TwoPhaseCommitDecisio
 	}
 
 	tx.publisher.once.Do(func() {
-		err := write(context.Background(), `CREATE TABLE IF NOT EXISTS `+OutboxTable+` (
+		err := write(ctx, `CREATE TABLE IF NOT EXISTS `+OutboxTable+` (
 			subject TEXT, 
 			changeset JSONB, 
 			timestamp DATETIME
@@ -833,10 +833,10 @@ func (tx *preparedOutboxCommit) RecordCommitDecision(write TwoPhaseCommitDecisio
 			slog.Error("outbox publisher create table", "error", err)
 		}
 	})
-	return write(context.Background(), `INSERT INTO `+OutboxTable+`(subject, changeset, timestamp) VALUES(?, ?, ?)`, tx.publisher.subject, string(changeset), time.Now())
+	return write(ctx, `INSERT INTO `+OutboxTable+`(subject, changeset, timestamp) VALUES(?, ?, ?)`, tx.publisher.subject, string(changeset), time.Now())
 }
 
-func (tx *preparedOutboxCommit) Commit() error {
+func (tx *preparedOutboxCommit) Commit(ctx context.Context) error {
 	return nil
 }
 
@@ -844,7 +844,7 @@ func (tx *preparedOutboxCommit) Abort() error {
 	return nil
 }
 
-func (tx *preparedOutboxCommit) ResolveCommit() (bool, error) {
+func (tx *preparedOutboxCommit) ResolveCommit(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
@@ -860,9 +860,9 @@ func NewCompositePublisher(publishers ...Publisher) *CompositePublisher {
 	}
 }
 
-func (p *CompositePublisher) Publish(cs *ChangeSet) error {
+func (p *CompositePublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	for _, pub := range p.publishers {
-		err := pub.Publish(cs)
+		err := pub.Publish(ctx, cs)
 		if err != nil {
 			return err
 		}
@@ -885,7 +885,7 @@ type delayedStartPublisher struct {
 	pub Publisher
 }
 
-func (p *delayedStartPublisher) Publish(cs *ChangeSet) error {
+func (p *delayedStartPublisher) Publish(_ context.Context, _ *ChangeSet) error {
 	return nil
 }
 

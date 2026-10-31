@@ -68,7 +68,7 @@ func (cs *ChangeSet) Clear() {
 	cs.Changes = nil
 }
 
-func (cs *ChangeSet) Send(pub Publisher) error {
+func (cs *ChangeSet) Send(ctx context.Context, pub Publisher) error {
 	if len(cs.Changes) == 0 || pub == nil {
 		return nil
 	}
@@ -76,11 +76,11 @@ func (cs *ChangeSet) Send(pub Publisher) error {
 
 	slog.Debug("Sending changeset", "changes", len(cs.Changes))
 	cs.Timestamp = time.Now().UnixNano()
-	return pub.Publish(cs)
+	return pub.Publish(ctx, cs)
 }
 
-func (cs *ChangeSet) Prepare(db *sql.DB) (conn *haconnect.ConnHooksEnabler, tx *sql.Tx, err error) {
-	ctx := ContextLocalDB(context.Background(), true)
+func (cs *ChangeSet) Prepare(ctx context.Context, db *sql.DB) (conn *haconnect.ConnHooksEnabler, tx *sql.Tx, err error) {
+	ctx = ContextLocalDB(ctx, true)
 	var sqlConn *sql.Conn
 	sqlConn, err = db.Conn(ctx)
 	if err != nil {
@@ -173,8 +173,8 @@ func (cs *ChangeSet) AfterCommit(conn *sql.Conn, err error) error {
 	return cs.interceptor.AfterApply(cs, conn, err)
 }
 
-func (cs *ChangeSet) Apply(db *sql.DB) (err error) {
-	conn, tx, err := cs.Prepare(db)
+func (cs *ChangeSet) Apply(ctx context.Context, db *sql.DB) (err error) {
+	conn, tx, err := cs.Prepare(ctx, db)
 	if err != nil {
 		if tx != nil {
 			err = errors.Join(err, tx.Rollback())
@@ -296,7 +296,7 @@ func (cs *ChangeSet) DebeziumData() []DebeziumData {
 		default:
 			continue
 		}
-		data.Payload.Source.Version = "0.10.0"
+		data.Payload.Source.Version = "0.15.0"
 		data.Payload.Source.Connector = "go-ha-connector"
 		data.Payload.Source.Name = cs.Filename
 		data.Payload.Source.DB = change.Database

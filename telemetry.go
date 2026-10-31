@@ -206,8 +206,8 @@ type telemetryPublisher struct {
 	id        string
 }
 
-func (p *telemetryPublisher) Publish(cs *ChangeSet) error {
-	ctx, span := p.telemetry.tracer.Start(context.Background(), "go_ha.replication.publish")
+func (p *telemetryPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
+	ctx, span := p.telemetry.tracer.Start(ctx, "go_ha.replication.publish")
 	started := time.Now()
 	carrier := propagation.MapCarrier{}
 	cs.TraceContext = nil
@@ -220,11 +220,13 @@ func (p *telemetryPublisher) Publish(cs *ChangeSet) error {
 		attribute.String("replication_id", p.id),
 		attribute.Int("changeset.change_count", len(cs.Changes)),
 	)
-	err := p.publisher.Publish(cs)
+	err := p.publisher.Publish(ctx, cs)
 	p.telemetry.recordPublish(ctx, started, err, p.node, p.id)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "published")
 	}
 	span.End()
 	return err

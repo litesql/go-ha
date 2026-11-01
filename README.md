@@ -252,17 +252,6 @@ The connector records replication publish/apply and snapshot counts and duration
 - **Slow synchronization**: Check snapshotter configuration and network latency.
 - **gRPC connection errors**: Verify `grpcPort` and `grpcToken` settings.
 
-### Resilience tests
-
-The integration resilience tests start an in-process JetStream server and use temporary SQLite databases; they do not require external NATS or Docker:
-
-```bash
-go test ./... -run '^TestResilience' -count=1
-```
-
-They cover leader failover, NATS server interruption and reconnection, duplicate publication deduplication, node restart, and replay of changesets published while a subscriber is offline.
-
-
 ## Projects Using go-ha
 
 - **[HA](https://github.com/litesql/ha)**: Highly available leaderless SQLite cluster with HTTP and PostgreSQL Wire Protocol

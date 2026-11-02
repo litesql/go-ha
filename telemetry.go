@@ -2,6 +2,7 @@ package ha
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -253,6 +254,27 @@ type telemetryPublisher struct {
 	id        string
 }
 
+type telemetryTwoPhaseCommitPublisher struct {
+	*telemetryPublisher
+	preparer TwoPhaseCommitPreparer
+}
+
+func wrapTelemetryPublisher(publisher Publisher, telemetry *openTelemetry, node, id string) Publisher {
+	instrumented := &telemetryPublisher{
+		publisher: publisher,
+		telemetry: telemetry,
+		node:      node,
+		id:        id,
+	}
+	if preparer, ok := publisher.(TwoPhaseCommitPreparer); ok {
+		return &telemetryTwoPhaseCommitPublisher{
+			telemetryPublisher: instrumented,
+			preparer:           preparer,
+		}
+	}
+	return instrumented
+}
+
 func (p *telemetryPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	ctx, span := p.telemetry.tracer.Start(ctx, "go_ha.replication.publish")
 	started := time.Now()
@@ -280,6 +302,37 @@ func (p *telemetryPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	return err
 }
 
+func (p *telemetryTwoPhaseCommitPublisher) PrepareTwoPhaseCommit(ctx context.Context, cs *ChangeSet) (PreparedTwoPhaseCommit, error) {
+	ctx, span := p.telemetry.tracer.Start(ctx, "go_ha.replication.prepare")
+	carrier := propagation.MapCarrier{}
+	cs.TraceContext = nil
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	if len(carrier) > 0 {
+		cs.TraceContext = carrier
+	}
+	span.SetAttributes(
+		attribute.String("node", p.node),
+		attribute.String("replication_id", p.id),
+		attribute.Int("changeset.change_count", len(cs.Changes)),
+	)
+	prepared, err := p.preparer.PrepareTwoPhaseCommit(ctx, cs)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		span.SetStatus(codes.Ok, "prepared")
+	}
+	span.End()
+	return prepared, err
+}
+
 func (p *telemetryPublisher) Sequence() uint64 {
 	return p.publisher.Sequence()
+}
+
+func (p *telemetryPublisher) BindLocalDB(db *sql.DB) error {
+	if binder, ok := p.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
+		return binder.BindLocalDB(db)
+	}
+	return nil
 }

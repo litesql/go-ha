@@ -320,12 +320,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			snapshotter.nodeName = c.name
 			snapshotter.replicationID = c.replicationID
 		}
-		c.publisher = &telemetryPublisher{
-			publisher: c.publisher,
-			telemetry: c.telemetry,
-			node:      c.name,
-			id:        c.replicationID,
-		}
+		c.publisher = wrapTelemetryPublisher(c.publisher, c.telemetry, c.name, c.replicationID)
 	}
 
 	if c.grpcPort > 0 {

@@ -146,6 +146,108 @@ func TestOpenTelemetryInstruments(t *testing.T) {
 	}
 }
 
+func TestTelemetryPublisherPreservesTwoPhaseCommit(t *testing.T) {
+	for name, publisher := range map[string]Publisher{
+		"two-phase-commit": &TwoPhaseCommitPublisher{},
+		"outbox":           &OutboxPublisher{},
+	} {
+		wrapped := wrapTelemetryPublisher(publisher, &openTelemetry{}, "node-a", "example")
+		if _, ok := wrapped.(TwoPhaseCommitPreparer); !ok {
+			t.Errorf("%s publisher does not expose TwoPhaseCommitPreparer", name)
+		}
+	}
+	wrapped := wrapTelemetryPublisher(&NoopPublisher{}, &openTelemetry{}, "node-a", "example")
+	if _, ok := wrapped.(TwoPhaseCommitPreparer); ok {
+		t.Error("publisher without two-phase commit support unexpectedly exposes TwoPhaseCommitPreparer")
+	}
+}
+
+func TestTelemetryTwoPhaseCommitPublisherDelegatesPrepare(t *testing.T) {
+	previousPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+
+	tracerProvider := sdktrace.NewTracerProvider()
+	t.Cleanup(func() {
+		if err := tracerProvider.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown tracer provider: %v", err)
+		}
+	})
+	prepared := &telemetryTestPreparedTwoPhaseCommit{}
+	underlying := &telemetryTestTwoPhaseCommitPublisher{prepared: prepared}
+	wrapped := wrapTelemetryPublisher(
+		underlying,
+		&openTelemetry{tracer: tracerProvider.Tracer(telemetryInstrumentationName)},
+		"node-a",
+		"example",
+	).(TwoPhaseCommitPreparer)
+	ctx, parent := tracerProvider.Tracer("test").Start(context.Background(), "parent")
+	defer parent.End()
+	changeset := &ChangeSet{Changes: []Change{{}}}
+	got, err := wrapped.PrepareTwoPhaseCommit(ctx, changeset)
+	if err != nil {
+		t.Fatalf("prepare changeset: %v", err)
+	}
+	if got != prepared {
+		t.Fatal("prepared transaction was not forwarded")
+	}
+	if underlying.changeset != changeset {
+		t.Fatal("changeset was not forwarded")
+	}
+	if changeset.TraceContext["traceparent"] == "" {
+		t.Fatal("prepared changeset does not contain propagated trace context")
+	}
+	if err := got.Commit(context.Background()); err != nil {
+		t.Fatalf("commit prepared changeset: %v", err)
+	}
+	if !prepared.committed {
+		t.Fatal("commit was not forwarded to the prepared transaction")
+	}
+}
+
+type telemetryTestTwoPhaseCommitPublisher struct {
+	changeset *ChangeSet
+	prepared  PreparedTwoPhaseCommit
+}
+
+func (p *telemetryTestTwoPhaseCommitPublisher) Publish(context.Context, *ChangeSet) error {
+	return nil
+}
+
+func (p *telemetryTestTwoPhaseCommitPublisher) Sequence() uint64 {
+	return 0
+}
+
+func (p *telemetryTestTwoPhaseCommitPublisher) PrepareTwoPhaseCommit(_ context.Context, cs *ChangeSet) (PreparedTwoPhaseCommit, error) {
+	p.changeset = cs
+	return p.prepared, nil
+}
+
+type telemetryTestPreparedTwoPhaseCommit struct {
+	committed bool
+}
+
+func (p *telemetryTestPreparedTwoPhaseCommit) RecordCommitDecision(context.Context, TwoPhaseCommitDecisionWriter) error {
+	return nil
+}
+
+func (p *telemetryTestPreparedTwoPhaseCommit) Commit(context.Context) error {
+	p.committed = true
+	return nil
+}
+
+func (p *telemetryTestPreparedTwoPhaseCommit) Abort() error {
+	return nil
+}
+
+func (p *telemetryTestPreparedTwoPhaseCommit) ResolveCommit(context.Context) (bool, error) {
+	return true, nil
+}
+
+func (p *telemetryTestPreparedTwoPhaseCommit) Close() {}
+
 type failingTelemetryTestPublisher struct{}
 
 func (failingTelemetryTestPublisher) Publish(context.Context, *ChangeSet) error {

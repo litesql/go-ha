@@ -535,7 +535,7 @@ func (p *TwoPhaseCommitPublisher) recoverLocalDecisions(ctx context.Context, db 
 		if err != nil {
 			return fmt.Errorf("connect workers for pending transaction %s: %w", item.id, err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+		ctx, cancel := context.WithTimeout(ctx, p.timeout)
 		for remote, worker := range workers {
 			stream, err := worker.ChangeSet(ctx)
 			if err != nil {
@@ -568,7 +568,7 @@ func (p *TwoPhaseCommitPublisher) recoverLocalDecisions(ctx context.Context, db 
 			}
 		}
 		cancel()
-		if _, err := db.ExecContext(context.Background(), `DELETE FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, item.id); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, item.id); err != nil {
 			return fmt.Errorf("clear recovered transaction %s: %w", item.id, err)
 		}
 	}

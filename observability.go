@@ -10,15 +10,13 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const (
 	HealthPath    = "/healthz"
 	ReadinessPath = "/readyz"
-	MetricsPath   = "/metrics"
 )
 
 type ObservabilityStatus struct {
@@ -68,40 +66,61 @@ func (c *Connector) ReadinessHandler() http.Handler {
 	})
 }
 
-func (c *Connector) MetricsHandler() http.Handler {
-	registry := prometheus.NewRegistry()
-	registry.MustRegister(newConnectorCollector(c))
-	handler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !observabilityGET(w, r) {
-			return
-		}
-		handler.ServeHTTP(w, r)
-	})
-}
-
 func (c *Connector) ObservabilityHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(HealthPath, c.HealthHandler())
 	mux.Handle(ReadinessPath, c.ReadinessHandler())
-	mux.Handle(MetricsPath, c.MetricsHandler())
 	if c.telemetry != nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx, span := c.telemetry.tracer.Start(r.Context(), "go_ha.observability.http")
+			started := time.Now()
 			route := "unmatched"
 			switch r.URL.Path {
-			case HealthPath, ReadinessPath, MetricsPath:
+			case HealthPath, ReadinessPath:
 				route = r.URL.Path
 			}
 			span.SetAttributes(
 				attribute.String("http.request.method", r.Method),
 				attribute.String("http.route", route),
+				attribute.String("node", c.name),
+				attribute.String("replication_id", c.replicationID),
 			)
-			mux.ServeHTTP(w, r.WithContext(ctx))
-			span.End()
+			response := &observabilityResponseWriter{ResponseWriter: w}
+			defer func() {
+				statusCode := response.statusCode
+				if statusCode == 0 {
+					statusCode = http.StatusOK
+				}
+				span.SetAttributes(attribute.Int("http.response.status_code", statusCode))
+				if statusCode >= http.StatusInternalServerError {
+					span.SetStatus(codes.Error, http.StatusText(statusCode))
+				}
+				c.telemetry.recordHTTPRequest(ctx, started, statusCode, r.Method, route, c.name, c.replicationID)
+				span.End()
+			}()
+			mux.ServeHTTP(response, r.WithContext(ctx))
 		})
 	}
 	return mux
+}
+
+type observabilityResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (w *observabilityResponseWriter) WriteHeader(statusCode int) {
+	if w.statusCode == 0 {
+		w.statusCode = statusCode
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *observabilityResponseWriter) Write(body []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	return w.ResponseWriter.Write(body)
 }
 
 func observabilityGET(w http.ResponseWriter, r *http.Request) bool {
@@ -210,79 +229,4 @@ func (c *Connector) consumerNodeName(consumer string) string {
 		}
 	}
 	return consumer
-}
-
-type connectorCollector struct {
-	connector  *Connector
-	leader     *prometheus.Desc
-	leaderInfo *prometheus.Desc
-	ready      *prometheus.Desc
-	published  *prometheus.Desc
-	applied    *prometheus.Desc
-	lag        *prometheus.Desc
-	nats       *prometheus.Desc
-	snapshot   *prometheus.Desc
-	errors     *prometheus.Desc
-}
-
-func newConnectorCollector(c *Connector) *connectorCollector {
-	constLabels := []string{"node", "replication_id"}
-	return &connectorCollector{
-		connector:  c,
-		leader:     prometheus.NewDesc("go_ha_leader", "Whether this node is the current cluster leader.", constLabels, nil),
-		leaderInfo: prometheus.NewDesc("go_ha_leader_info", "Current cluster leader target.", []string{"node", "replication_id", "target"}, nil),
-		ready:      prometheus.NewDesc("go_ha_ready", "Whether this node is ready to serve requests.", constLabels, nil),
-		published:  prometheus.NewDesc("go_ha_replication_published_sequence", "Latest replication sequence published by this node.", constLabels, nil),
-		applied:    prometheus.NewDesc("go_ha_replication_applied_sequence", "Latest replication sequence applied by this node.", constLabels, nil),
-		lag:        prometheus.NewDesc("go_ha_replication_lag_messages", "Unapplied replication messages for a cluster node.", constLabels, nil),
-		nats:       prometheus.NewDesc("go_ha_nats_connected", "Whether the configured NATS connection is connected.", constLabels, nil),
-		snapshot:   prometheus.NewDesc("go_ha_snapshot_last_timestamp_seconds", "Unix timestamp of the most recent database snapshot, or zero if none exists.", constLabels, nil),
-		errors:     prometheus.NewDesc("go_ha_observability_collection_error", "Whether cluster observability data collection encountered an error.", constLabels, nil),
-	}
-}
-
-func (c *connectorCollector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- c.leader
-	ch <- c.leaderInfo
-	ch <- c.ready
-	ch <- c.published
-	ch <- c.applied
-	ch <- c.lag
-	ch <- c.nats
-	ch <- c.snapshot
-	ch <- c.errors
-}
-
-func (c *connectorCollector) Collect(ch chan<- prometheus.Metric) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	status := c.connector.observabilityStatus(ctx, true)
-	labels := []string{status.NodeName, status.ReplicationID}
-
-	gauge(ch, c.leader, boolGauge(status.Leader), labels...)
-	ch <- prometheus.MustNewConstMetric(c.leaderInfo, prometheus.GaugeValue, 1, status.NodeName, status.ReplicationID, status.LeaderTarget)
-	gauge(ch, c.ready, boolGauge(status.Ready), labels...)
-	gauge(ch, c.published, float64(status.PublishedSequence), labels...)
-	gauge(ch, c.applied, float64(status.AppliedSequence), labels...)
-	gauge(ch, c.nats, boolGauge(status.NATSConnected), labels...)
-	var snapshotTime float64
-	if status.LastSnapshotTime != nil {
-		snapshotTime = float64(status.LastSnapshotTime.UnixNano()) / float64(time.Second)
-	}
-	gauge(ch, c.snapshot, snapshotTime, labels...)
-	gauge(ch, c.errors, boolGauge(len(status.ObservabilityErrors) > 0), labels...)
-	for node, lag := range status.ReplicationLagByNode {
-		gauge(ch, c.lag, float64(lag), node, status.ReplicationID)
-	}
-}
-
-func gauge(ch chan<- prometheus.Metric, desc *prometheus.Desc, value float64, labels ...string) {
-	ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, value, labels...)
-}
-
-func boolGauge(value bool) float64 {
-	if value {
-		return 1
-	}
-	return 0
 }

@@ -2,9 +2,13 @@ package ha
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -69,29 +73,85 @@ func TestOpenTelemetryInstruments(t *testing.T) {
 	if changeset.TraceContext["traceparent"] == "" {
 		t.Error("published changeset does not contain propagated trace context")
 	}
+	failedPublisher := &telemetryPublisher{
+		publisher: failingTelemetryTestPublisher{},
+		telemetry: telemetry,
+		node:      connector.name,
+		id:        connector.replicationID,
+	}
+	if err := failedPublisher.Publish(context.Background(), &ChangeSet{}); err == nil {
+		t.Fatal("failed publish did not return an error")
+	}
+
+	connector.telemetry = telemetry
+	response := httptest.NewRecorder()
+	connector.ObservabilityHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, ReadinessPath, nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
 
 	var data metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &data); err != nil {
 		t.Fatalf("collect metrics: %v", err)
 	}
 	metricNames := make(map[string]bool)
+	counterTotals := make(map[string]int64)
+	expectedCounters := map[string]int64{
+		"go_ha.replication.changesets.published": 2,
+		"go_ha.replication.publish.errors":       1,
+		"go_ha.http.requests":                    1,
+	}
 	for _, scope := range data.ScopeMetrics {
 		for _, item := range scope.Metrics {
 			metricNames[item.Name] = true
+			if _, expected := expectedCounters[item.Name]; expected {
+				sum, ok := item.Data.(metricdata.Sum[int64])
+				if !ok {
+					t.Errorf("metric %q data type = %T, want an integer sum", item.Name, item.Data)
+					continue
+				}
+				for _, point := range sum.DataPoints {
+					counterTotals[item.Name] += point.Value
+				}
+			}
 		}
 	}
 	for _, name := range []string{
 		"go_ha.replication.changesets.published",
+		"go_ha.replication.publish.errors",
 		"go_ha.cluster.leader",
 		"go_ha.replication.lag",
+		"go_ha.http.requests",
+		"go_ha.http.request.duration",
 	} {
 		if !metricNames[name] {
 			t.Errorf("collected metrics do not include %q", name)
 		}
 	}
+	for name, want := range expectedCounters {
+		if got := counterTotals[name]; got != want {
+			t.Errorf("metric %q total = %d, want %d", name, got, want)
+		}
+	}
 
 	spans := spanExporter.GetSpans()
-	if len(spans) != 2 || spans[0].Name != "go_ha.replication.publish" {
-		t.Errorf("exported spans = %+v, want two replication publish spans", spans)
+	if len(spans) != 4 || spans[0].Name != "go_ha.replication.publish" || spans[3].Name != "go_ha.observability.http" {
+		t.Errorf("exported spans = %+v, want three publish spans and one HTTP span", spans)
 	}
+	if len(spans) >= 3 && spans[2].Status.Code != codes.Error {
+		t.Errorf("failed publish span status = %v, want error", spans[2].Status.Code)
+	}
+	if len(spans) >= 4 && spans[3].Status.Code != codes.Error {
+		t.Errorf("HTTP readiness span status = %v, want error for HTTP 503", spans[3].Status.Code)
+	}
+}
+
+type failingTelemetryTestPublisher struct{}
+
+func (failingTelemetryTestPublisher) Publish(context.Context, *ChangeSet) error {
+	return errors.New("publish failed")
+}
+
+func (failingTelemetryTestPublisher) Sequence() uint64 {
+	return 0
 }

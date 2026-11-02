@@ -19,11 +19,16 @@ type openTelemetry struct {
 	tracer trace.Tracer
 
 	publishedChangesets metric.Int64Counter
+	publishErrors       metric.Int64Counter
 	publishDuration     metric.Float64Histogram
 	appliedChangesets   metric.Int64Counter
+	applyErrors         metric.Int64Counter
 	applyDuration       metric.Float64Histogram
 	createdSnapshots    metric.Int64Counter
+	snapshotErrors      metric.Int64Counter
 	snapshotDuration    metric.Float64Histogram
+	httpRequests        metric.Int64Counter
+	httpDuration        metric.Float64Histogram
 
 	leader            metric.Int64ObservableGauge
 	ready             metric.Int64ObservableGauge
@@ -62,11 +67,17 @@ func newOpenTelemetry(c *Connector) (*openTelemetry, error) {
 	if t.publishedChangesets, err = meter.Int64Counter("go_ha.replication.changesets.published", metric.WithDescription("Number of published replication changesets.")); err != nil {
 		return nil, fmt.Errorf("create published changesets instrument: %w", err)
 	}
+	if t.publishErrors, err = meter.Int64Counter("go_ha.replication.publish.errors", metric.WithDescription("Number of failed replication publish operations.")); err != nil {
+		return nil, fmt.Errorf("create publish errors instrument: %w", err)
+	}
 	if t.publishDuration, err = meter.Float64Histogram("go_ha.replication.publish.duration", metric.WithUnit("s"), metric.WithDescription("Time spent publishing replication changesets.")); err != nil {
 		return nil, fmt.Errorf("create publish duration instrument: %w", err)
 	}
 	if t.appliedChangesets, err = meter.Int64Counter("go_ha.replication.changesets.applied", metric.WithDescription("Number of successfully applied replication changesets.")); err != nil {
 		return nil, fmt.Errorf("create applied changesets instrument: %w", err)
+	}
+	if t.applyErrors, err = meter.Int64Counter("go_ha.replication.apply.errors", metric.WithDescription("Number of failed replication apply operations.")); err != nil {
+		return nil, fmt.Errorf("create apply errors instrument: %w", err)
 	}
 	if t.applyDuration, err = meter.Float64Histogram("go_ha.replication.apply.duration", metric.WithUnit("s"), metric.WithDescription("Time spent applying replication changesets.")); err != nil {
 		return nil, fmt.Errorf("create apply duration instrument: %w", err)
@@ -74,8 +85,17 @@ func newOpenTelemetry(c *Connector) (*openTelemetry, error) {
 	if t.createdSnapshots, err = meter.Int64Counter("go_ha.snapshots.created", metric.WithDescription("Number of successfully created snapshots.")); err != nil {
 		return nil, fmt.Errorf("create snapshots instrument: %w", err)
 	}
+	if t.snapshotErrors, err = meter.Int64Counter("go_ha.snapshot.errors", metric.WithDescription("Number of failed snapshot operations.")); err != nil {
+		return nil, fmt.Errorf("create snapshot errors instrument: %w", err)
+	}
 	if t.snapshotDuration, err = meter.Float64Histogram("go_ha.snapshot.duration", metric.WithUnit("s"), metric.WithDescription("Time spent creating database snapshots.")); err != nil {
 		return nil, fmt.Errorf("create snapshot duration instrument: %w", err)
+	}
+	if t.httpRequests, err = meter.Int64Counter("go_ha.http.requests", metric.WithDescription("Number of requests handled by the observability HTTP handler.")); err != nil {
+		return nil, fmt.Errorf("create HTTP requests instrument: %w", err)
+	}
+	if t.httpDuration, err = meter.Float64Histogram("go_ha.http.request.duration", metric.WithUnit("s"), metric.WithDescription("Time spent handling requests by the observability HTTP handler.")); err != nil {
+		return nil, fmt.Errorf("create HTTP request duration instrument: %w", err)
 	}
 	if t.leader, err = meter.Int64ObservableGauge("go_ha.cluster.leader", metric.WithDescription("Whether this node is the current cluster leader.")); err != nil {
 		return nil, fmt.Errorf("create leader instrument: %w", err)
@@ -158,6 +178,11 @@ func (t *openTelemetry) recordPublish(ctx context.Context, started time.Time, er
 	t.publishDuration.Record(ctx, time.Since(started).Seconds(), attrs)
 	if err == nil {
 		t.publishedChangesets.Add(ctx, 1, attrs)
+	} else {
+		t.publishErrors.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("node", node),
+			attribute.String("replication_id", replicationID),
+		))
 	}
 }
 
@@ -170,6 +195,11 @@ func (t *openTelemetry) recordApply(ctx context.Context, started time.Time, err 
 	t.applyDuration.Record(ctx, time.Since(started).Seconds(), attrs)
 	if err == nil {
 		t.appliedChangesets.Add(ctx, 1, attrs)
+	} else {
+		t.applyErrors.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("node", node),
+			attribute.String("replication_id", replicationID),
+		))
 	}
 }
 
@@ -182,7 +212,24 @@ func (t *openTelemetry) recordSnapshot(ctx context.Context, started time.Time, s
 	t.snapshotDuration.Record(ctx, time.Since(started).Seconds(), attrs)
 	if err == nil && sequence > 0 {
 		t.createdSnapshots.Add(ctx, 1, attrs)
+	} else if err != nil {
+		t.snapshotErrors.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("node", node),
+			attribute.String("replication_id", replicationID),
+		))
 	}
+}
+
+func (t *openTelemetry) recordHTTPRequest(ctx context.Context, started time.Time, statusCode int, method, route, node, replicationID string) {
+	attrs := metric.WithAttributes(
+		attribute.Int("http.response.status_code", statusCode),
+		attribute.String("http.request.method", method),
+		attribute.String("http.route", route),
+		attribute.String("node", node),
+		attribute.String("replication_id", replicationID),
+	)
+	t.httpRequests.Add(ctx, 1, attrs)
+	t.httpDuration.Record(ctx, time.Since(started).Seconds(), attrs)
 }
 
 func operationResult(err error) string {
@@ -221,6 +268,7 @@ func (p *telemetryPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 		attribute.Int("changeset.change_count", len(cs.Changes)),
 	)
 	err := p.publisher.Publish(ctx, cs)
+	span.SetAttributes(attribute.Int64("messaging.message.sequence", sequenceToInt64(p.publisher.Sequence())))
 	p.telemetry.recordPublish(ctx, started, err, p.node, p.id)
 	if err != nil {
 		span.RecordError(err)

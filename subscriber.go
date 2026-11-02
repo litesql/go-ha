@@ -605,11 +605,11 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		span.SetAttributes(
 			attribute.String("node", s.node),
 			attribute.String("replication_id", cs.Filename),
-			attribute.Int64("replication.sequence", int64(meta.Sequence.Stream)),
+			attribute.Int64("replication.sequence", sequenceToInt64(meta.Sequence.Stream)),
 			attribute.Int("changeset.change_count", len(cs.Changes)),
 		)
 	}
-	err = cs.Apply(context.Background(), s.db)
+	err = cs.Apply(ctx, s.db)
 	if s.telemetry != nil {
 		s.telemetry.recordApply(ctx, started, err, s.node, cs.Filename)
 		if err != nil {

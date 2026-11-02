@@ -60,19 +60,9 @@ func TestObservabilityHandler(t *testing.T) {
 	}
 
 	metrics := httptest.NewRecorder()
-	handler.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, MetricsPath, nil))
-	if metrics.Code != http.StatusOK {
-		t.Fatalf("metrics status = %d, want %d", metrics.Code, http.StatusOK)
-	}
-	for _, metric := range []string{
-		"go_ha_leader{node=\"node-a\",replication_id=\"example\"} 1",
-		"go_ha_replication_published_sequence{node=\"node-a\",replication_id=\"example\"} 10",
-		"go_ha_replication_applied_sequence{node=\"node-a\",replication_id=\"example\"} 7",
-		"go_ha_replication_lag_messages{node=\"node-a\",replication_id=\"example\"} 3",
-	} {
-		if !strings.Contains(metrics.Body.String(), metric) {
-			t.Errorf("metrics response does not contain %q", metric)
-		}
+	handler.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if metrics.Code != http.StatusNotFound {
+		t.Errorf("metrics status = %d, want %d", metrics.Code, http.StatusNotFound)
 	}
 }
 
@@ -81,7 +71,6 @@ func TestObservabilityHandlersRequireGET(t *testing.T) {
 	for _, handler := range []http.Handler{
 		connector.HealthHandler(),
 		connector.ReadinessHandler(),
-		connector.MetricsHandler(),
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", nil))

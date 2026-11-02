@@ -568,7 +568,7 @@ func (p *TwoPhaseCommitPublisher) recoverLocalDecisions(ctx context.Context, db 
 			}
 		}
 		cancel()
-		if _, err := db.ExecContext(ctx, `DELETE FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, item.id); err != nil {
+		if _, err := db.ExecContext(context.Background(), `DELETE FROM `+TwoPhaseCommitDecisionTable+` WHERE transaction_id = ?`, item.id); err != nil {
 			return fmt.Errorf("clear recovered transaction %s: %w", item.id, err)
 		}
 	}

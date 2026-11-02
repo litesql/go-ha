@@ -326,6 +326,24 @@ func (p *telemetryTwoPhaseCommitPublisher) PrepareTwoPhaseCommit(ctx context.Con
 	return prepared, err
 }
 
+func (p *telemetryTwoPhaseCommitPublisher) RecoverTwoPhaseCommits(ctx context.Context) error {
+	if recover, ok := p.publisher.(interface {
+		RecoverTwoPhaseCommits(ctx context.Context) error
+	}); ok {
+		ctx, span := p.telemetry.tracer.Start(ctx, "go_ha.replication.recover")
+		err := recover.RecoverTwoPhaseCommits(ctx)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		} else {
+			span.SetStatus(codes.Ok, "recovered")
+		}
+		span.End()
+		return err
+	}
+	return nil
+}
+
 func (p *telemetryPublisher) Sequence() uint64 {
 	return p.publisher.Sequence()
 }

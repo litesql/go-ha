@@ -766,7 +766,7 @@ func (s *DBSubscriber) HistoryByTime(ctx context.Context, duration time.Duration
 			continue
 		}
 		cs.StreamSeq = seq
-		cs.SetStrategy(fullIdentifyStrategy{})
+		cs.SetStrategy(s.applyStrategy)
 		item := cs.toItem()
 		if len(item.SQL) > 0 {
 			items = append(items, item)
@@ -855,7 +855,7 @@ func (s *DBSubscriber) undo(ctx context.Context, filter haconnect.UndoFilter, ta
 		}
 		undoChangeSet.Changes = append(undoChangeSet.Changes, cs.Changes...)
 	}
-	if rows.Err() != nil {
+	if err := rows.Err(); err != nil {
 		return err
 	}
 	if filter == haconnect.UndoFilterEntity {

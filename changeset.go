@@ -117,6 +117,7 @@ func (cs *ChangeSet) Prepare(ctx context.Context, db *sql.DB) (conn *haconnect.C
 	if cs.TransactionID != "" {
 		_, err = tx.ExecContext(ctx, `INSERT INTO `+haconnect.TwoPhaseCommitTransactionTable+`(transaction_id, state) VALUES (?, 'PREPARED')`, cs.TransactionID)
 		if err != nil {
+			err = errors.Join(err, tx.Rollback())
 			return
 		}
 	}
@@ -151,6 +152,7 @@ func (cs *ChangeSet) Prepare(ctx context.Context, db *sql.DB) (conn *haconnect.C
 			_, err = tx.ExecContext(ctx, sqlQuery, args...)
 			if err != nil {
 				slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sqlQuery)
+				err = errors.Join(err, tx.Rollback())
 				return
 			}
 		}
@@ -179,8 +181,8 @@ func (cs *ChangeSet) Apply(ctx context.Context, db *sql.DB) (err error) {
 		if tx != nil {
 			err = errors.Join(err, tx.Rollback())
 		}
-		err = errors.Join(err, cs.AfterCommit(conn.SqlConn, err))
 		if conn != nil {
+			err = errors.Join(err, cs.AfterCommit(conn.SqlConn, err))
 			err = errors.Join(err, conn.Close())
 		}
 		return err
@@ -188,8 +190,8 @@ func (cs *ChangeSet) Apply(ctx context.Context, db *sql.DB) (err error) {
 	if tx != nil {
 		err = tx.Commit()
 	}
-	err = errors.Join(err, cs.AfterCommit(conn.SqlConn, err))
 	if conn != nil {
+		err = errors.Join(err, cs.AfterCommit(conn.SqlConn, err))
 		err = errors.Join(err, conn.Close())
 	}
 	return err
@@ -405,7 +407,19 @@ func (rowidIdentifyStrategy) ToSQL(change Change) (string, []any) {
 	var args []any
 	switch change.Operation {
 	case "INSERT":
-		sql = fmt.Sprintf("INSERT INTO %s.%s (%s, `rowid`) VALUES (%s) ON CONFLICT DO UPDATE SET %s, `rowid` = ?", change.Database, change.Table, strings.Join(change.Columns, ", "), placeholders(len(change.NewValues)+1), strings.Join(change.Columns, " = ?, "))
+		setClause := make([]string, len(change.Columns))
+		for i, col := range change.Columns {
+			setClause[i] = fmt.Sprintf("%s = ?%d", col, i+1)
+		}
+		rowidParam := len(change.NewValues) + 1
+		sql = fmt.Sprintf("INSERT INTO %s.%s (%s, `rowid`) VALUES (%s) ON CONFLICT DO UPDATE SET %s, `rowid` = ?%d",
+			change.Database,
+			change.Table,
+			strings.Join(change.Columns, ", "),
+			placeholders(rowidParam),
+			strings.Join(setClause, ", "),
+			rowidParam,
+		)
 		args = append(change.NewValues, change.NewRowID)
 	case "UPDATE":
 		setClause := make([]string, len(change.Columns))

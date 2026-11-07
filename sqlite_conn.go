@@ -290,21 +290,26 @@ func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 		return c.redirectQuery(ctx, query, args)
 	}
 
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
+	if c.txseq > 0 && c.txseqTracker.LatestSeq() < c.txseq {
+		ticker := time.NewTicker(time.Millisecond)
+		defer ticker.Stop()
 
-	ctxTimeout, cancel := context.WithTimeout(ctx, c.connector.GrpcTimeout())
-	defer cancel()
-LOOP:
-	for {
-		if c.txseqTracker.LatestSeq() >= c.txseq {
-			break LOOP
-		}
+		ctxTimeout, cancel := context.WithTimeout(ctx, c.connector.GrpcTimeout())
+		defer cancel()
+	LOOP:
+		for {
+			if c.txseqTracker.LatestSeq() >= c.txseq {
+				break LOOP
+			}
 
-		select {
-		case <-ctxTimeout.Done():
-			return c.redirectQuery(ctx, query, args)
-		case <-ticker.C:
+			select {
+			case <-ctxTimeout.Done():
+				if c.redirectToGrpc(true) {
+					return c.redirectQuery(ctx, query, args)
+				}
+				break LOOP
+			case <-ticker.C:
+			}
 		}
 	}
 	if len(stmts) == 1 && !c.ignoreQueryRouter(ctx) {

@@ -844,7 +844,9 @@ func (s *Service) ChangeSet(ctx context.Context, stream *connect.BidiStream[sqlv
 			}
 			tx = nil
 			var msg string
-			err = errors.Join(err, worker.AfterCommit(conn.SqlConn, err))
+			if conn != nil {
+				err = errors.Join(err, worker.AfterCommit(conn.SqlConn, err))
+			}
 			if err != nil {
 				msg = err.Error()
 			}

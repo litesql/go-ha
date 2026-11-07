@@ -2,7 +2,6 @@ package ha
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -155,19 +154,24 @@ func StartLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 			case err := <-errChan:
 				slog.Error("leader election", "error", err)
 			case <-ticker.C:
+				if node.State() == graft.LEADER {
+					_, err := kv.PutString(ctx, redirectKey, redirectTarget)
+					if err != nil {
+						retries++
+						if retries >= 3 {
+							slog.Error("leader failed to store redirect target", "error", err)
+							dl.setTarget("")
+							retries = 0
+						}
+						continue
+					}
+					retries = 0
+					dl.setTarget(redirectTarget)
+					continue
+				}
 				redirect, err := kv.Get(ctx, redirectKey)
 				if err != nil {
 					retries++
-					if errors.Is(err, jetstream.ErrKeyNotFound) && node.State() == graft.LEADER {
-						_, err := kv.PutString(ctx, redirectKey, redirectTarget)
-						if err != nil {
-							slog.Error("leader failed to store redirect target", "error", err)
-							continue
-						}
-						retries = 0
-						dl.setTarget(redirectTarget)
-						continue
-					}
 					if retries >= 3 {
 						slog.Error("failed to get redirect target", "error", err)
 						dl.setTarget("")
@@ -178,6 +182,7 @@ func StartLeaderElection(ctx context.Context, redirectTarget string, nc *nats.Co
 				retries = 0
 				dl.setTarget(string(redirect.Value()))
 			case <-ctx.Done():
+				ticker.Stop()
 				node.Close()
 				return
 			}

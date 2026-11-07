@@ -716,6 +716,7 @@ func NewOutboxPublisher(publisher Publisher, subject string) *OutboxPublisher {
 	pub := &OutboxPublisher{
 		publisher: publisher,
 		subject:   subject,
+		close:     make(chan struct{}),
 	}
 	go pub.start()
 	return pub

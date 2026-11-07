@@ -82,7 +82,7 @@ func (c *Connector) ConsistentReader(timeout time.Duration, methods ...string) f
 func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Duration, methods ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		if !slices.Contains(methods, r.Method) || c.leaderProvider.IsLeader() {
+		if !slices.Contains(methods, r.Method) {
 			h(w, r)
 			return
 		}
@@ -98,6 +98,11 @@ func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Durati
 			}
 		}
 
+		if txSeq == 0 {
+			h(w, r)
+			return
+		}
+
 		ticker := time.NewTicker(time.Millisecond)
 		defer ticker.Stop()
 
@@ -105,7 +110,7 @@ func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Durati
 		defer cancel()
 	LOOP:
 		for {
-			if c.LatestSeq() >= txSeq {
+			if max(c.LatestSeq(), c.PubSeq()) >= txSeq {
 				break LOOP
 			}
 
@@ -114,6 +119,9 @@ func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Durati
 				if r.URL.Query().Get("forward") == "false" {
 					http.Error(w, "cosistent reader timeout", http.StatusGatewayTimeout)
 					return
+				}
+				if c.leaderProvider.IsLeader() {
+					break LOOP
 				}
 				target := c.leaderProvider.RedirectTarget()
 				if target == "" {

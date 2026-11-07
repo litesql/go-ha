@@ -80,6 +80,14 @@ func UnverifiedStatement(source string, hasDistinct bool,
 	}
 }
 
+func (s *Statement) clone() *Statement {
+	if s == nil {
+		return nil
+	}
+	cs := *s
+	return &cs
+}
+
 func ParseStatement(ctx context.Context, source string) (*Statement, error) {
 	statements, ok := cache.Get(source)
 	if !ok {
@@ -88,12 +96,15 @@ func ParseStatement(ctx context.Context, source string) (*Statement, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(statements) == 1 {
+			statements[0].source = source
+		}
 		cache.Add(source, statements)
 	}
 	if len(statements) > 1 {
 		return nil, fmt.Errorf("multiple SQL statements are not allowed: %w", ErrInvalidSQL)
 	}
-	result := statements[0]
+	result := statements[0].clone()
 	result.source = source
 	return result, nil
 }

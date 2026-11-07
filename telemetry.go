@@ -348,6 +348,14 @@ func (p *telemetryPublisher) Sequence() uint64 {
 	return p.publisher.Sequence()
 }
 
+func (p *telemetryPublisher) SequenceRange() (uint64, uint64) {
+	if rp, ok := p.publisher.(interface{ SequenceRange() (uint64, uint64) }); ok {
+		return rp.SequenceRange()
+	}
+	seq := p.publisher.Sequence()
+	return seq, seq
+}
+
 func (p *telemetryPublisher) BindLocalDB(db *sql.DB) error {
 	if binder, ok := p.publisher.(interface{ BindLocalDB(*sql.DB) error }); ok {
 		return binder.BindLocalDB(db)

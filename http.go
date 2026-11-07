@@ -3,16 +3,21 @@ package ha
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
-const TXCookieName = "_txseq"
+const (
+	TXCookieName    = "_txseq"
+	forwardedHeader = "X-Ha-Forwarded"
+)
 
 func (c *Connector) ForwardToLeader(timeout time.Duration, methods ...string) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
@@ -28,13 +33,16 @@ func (c *Connector) ForwardToLeaderFunc(h http.HandlerFunc, timeout time.Duratio
 			return
 		}
 
-		isLeader := c.leaderProvider.IsLeader()
+		isLeader := c.leaderProvider != nil && c.leaderProvider.IsLeader()
 		if isLeader {
 			h(c.ResponseWriter(w), r)
 			return
 		}
 
-		target := c.leaderProvider.RedirectTarget()
+		var target string
+		if c.leaderProvider != nil {
+			target = c.leaderProvider.RedirectTarget()
+		}
 		if target == "" {
 			http.Error(w, "leader redirect URL not found", http.StatusInternalServerError)
 			return
@@ -46,11 +54,17 @@ func (c *Connector) ForwardToLeaderFunc(h http.HandlerFunc, timeout time.Duratio
 			return
 		}
 
-		resp, err := forwardTo(target, r, timeout)
+		if r.Header.Get(forwardedHeader) == "true" || (c.leaderElectionLocalTarget != "" && target == c.leaderElectionLocalTarget) {
+			http.Error(w, "leader redirect loop detected", http.StatusBadGateway)
+			return
+		}
+
+		resp, cancel, err := forwardTo(target, r, timeout)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		defer cancel()
 		defer resp.Body.Close()
 		for k, v := range resp.Header {
 			for i, value := range v {
@@ -88,17 +102,21 @@ func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Durati
 		}
 
 		var txSeq uint64
-		if cookie, _ := r.Cookie(TXCookieName); cookie != nil {
-			var err error
-			txSeq, err = strconv.ParseUint(cookie.Value, 10, 64)
+		for _, cookie := range r.Cookies() {
+			if cookie.Name != TXCookieName {
+				continue
+			}
+			seq, err := strconv.ParseUint(cookie.Value, 10, 64)
 			if err != nil {
 				slog.Warn("invalid cookie", "name", TXCookieName, "error", err)
-				h(w, r)
-				return
+				continue
+			}
+			if seq > txSeq {
+				txSeq = seq
 			}
 		}
 
-		if txSeq == 0 {
+		if txSeq == 0 || c.ContiguousSeq() >= txSeq {
 			h(w, r)
 			return
 		}
@@ -106,33 +124,61 @@ func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Durati
 		ticker := time.NewTicker(time.Millisecond)
 		defer ticker.Stop()
 
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		var (
+			ctx    context.Context
+			cancel context.CancelFunc
+		)
+		if timeout > 0 {
+			ctx, cancel = context.WithTimeout(r.Context(), timeout)
+		} else {
+			ctx, cancel = context.WithCancel(r.Context())
+			cancel()
+		}
 		defer cancel()
 	LOOP:
 		for {
-			if max(c.LatestSeq(), c.PubSeq()) >= txSeq {
+			if c.ContiguousSeq() >= txSeq {
 				break LOOP
 			}
 
 			select {
 			case <-ctx.Done():
-				if r.URL.Query().Get("forward") == "false" {
-					http.Error(w, "cosistent reader timeout", http.StatusGatewayTimeout)
+				if r.Context().Err() != nil {
 					return
 				}
-				if c.leaderProvider.IsLeader() {
+				if c.ContiguousSeq() >= txSeq {
 					break LOOP
 				}
-				target := c.leaderProvider.RedirectTarget()
+				if r.URL.Query().Get("forward") == "false" || r.Header.Get(forwardedHeader) == "true" {
+					http.Error(w, "consistent reader timeout", http.StatusGatewayTimeout)
+					return
+				}
+				if c.leaderProvider != nil && c.leaderProvider.IsLeader() {
+					http.Error(w, "consistent reader timeout", http.StatusGatewayTimeout)
+					return
+				}
+				var target string
+				if c.leaderProvider != nil {
+					target = c.leaderProvider.RedirectTarget()
+				}
 				if target == "" {
 					http.Error(w, "leader redirect URL not found", http.StatusInternalServerError)
 					return
 				}
-				resp, err := forwardTo(target, r, timeout)
+				if c.leaderElectionLocalTarget != "" && target == c.leaderElectionLocalTarget {
+					http.Error(w, "consistent reader timeout", http.StatusGatewayTimeout)
+					return
+				}
+				resp, forwardCancel, err := forwardTo(target, r, timeout)
 				if err != nil {
+					if errors.Is(err, context.DeadlineExceeded) {
+						http.Error(w, "consistent reader timeout", http.StatusGatewayTimeout)
+						return
+					}
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
+				defer forwardCancel()
 				defer resp.Body.Close()
 				for k, v := range resp.Header {
 					for i, value := range v {
@@ -153,20 +199,31 @@ func (c *Connector) ConsistentReaderFunc(h http.HandlerFunc, timeout time.Durati
 	}
 }
 
-func forwardTo(addr string, req *http.Request, timeout time.Duration) (*http.Response, error) {
-	newURL := addr + req.URL.Path + "?" + req.URL.RawQuery
+func forwardTo(addr string, req *http.Request, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
+	newURL := strings.TrimRight(addr, "/") + req.URL.Path
+	if req.URL.RawQuery != "" {
+		newURL += "?" + req.URL.RawQuery
+	}
 
 	var buf bytes.Buffer
-	defer req.Body.Close()
-	_, err := io.Copy(&buf, req.Body)
-	if err != nil {
-		return nil, err
+	if req.Body != nil {
+		defer req.Body.Close()
+		_, err := io.Copy(&buf, req.Body)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	ctx, cancel := context.WithTimeout(req.Context(), timeout)
-	defer cancel()
+	var (
+		ctx                       = req.Context()
+		cancel context.CancelFunc = func() {}
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(req.Context(), timeout)
+	}
 	newReq, err := http.NewRequestWithContext(ctx, req.Method, newURL, &buf)
 	if err != nil {
-		return nil, err
+		cancel()
+		return nil, nil, err
 	}
 	for k, v := range req.Header {
 		for i, value := range v {
@@ -177,7 +234,13 @@ func forwardTo(addr string, req *http.Request, timeout time.Duration) (*http.Res
 			newReq.Header.Add(k, value)
 		}
 	}
-	return http.DefaultClient.Do(newReq)
+	newReq.Header.Set(forwardedHeader, "true")
+	resp, err := http.DefaultClient.Do(newReq)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return resp, cancel, nil
 }
 
 type responseWriter struct {
@@ -188,25 +251,34 @@ type responseWriter struct {
 }
 
 func (rw *responseWriter) Write(b []byte) (int, error) {
-	if !rw.written && (rw.statusCode == 0 || (rw.statusCode >= 200 && rw.statusCode < 300)) {
-		rw.setTxCookie()
+	if !rw.written {
+		if rw.statusCode == 0 || (rw.statusCode >= 200 && rw.statusCode < 300) {
+			rw.setTxCookie()
+		}
+		rw.written = true
 	}
 	return rw.ResponseWriter.Write(b)
 }
 
 func (rw *responseWriter) WriteHeader(statusCode int) {
-	rw.statusCode = statusCode
-	if rw.statusCode >= 200 && rw.statusCode < 300 {
-		rw.setTxCookie()
+	if !rw.written {
+		rw.statusCode = statusCode
+		if rw.statusCode >= 200 && rw.statusCode < 300 {
+			rw.setTxCookie()
+		}
+		rw.written = true
 	}
-	rw.written = true
 	rw.ResponseWriter.WriteHeader(statusCode)
 }
 
 func (rw *responseWriter) setTxCookie() {
+	if rw.pub == nil {
+		return
+	}
 	http.SetCookie(rw.ResponseWriter, &http.Cookie{
 		Name:     TXCookieName,
 		Value:    fmt.Sprint(rw.pub.Sequence()),
+		Path:     "/",
 		Expires:  time.Now().Add(5 * time.Minute),
 		HttpOnly: true,
 	})

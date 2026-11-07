@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,11 +95,13 @@ func (p *JSONPublisher) Sequence() uint64 {
 }
 
 type NATSPublisher struct {
-	nc       *nats.Conn
-	js       jetstream.JetStream
-	timeout  time.Duration
-	sequence atomic.Uint64
-	subject  string
+	nc              *nats.Conn
+	js              jetstream.JetStream
+	timeout         time.Duration
+	seqMu           sync.RWMutex
+	sequence        uint64
+	contiguousStart uint64
+	subject         string
 }
 
 func NewNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig) (*NATSPublisher, error) {
@@ -140,17 +141,30 @@ func (p *NATSPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 	if err != nil {
 		return err
 	}
-	for sequence := p.sequence.Load(); sequence < pubAck.Sequence; sequence = p.sequence.Load() {
-		if p.sequence.CompareAndSwap(sequence, pubAck.Sequence) {
-			break
+	p.seqMu.Lock()
+	if pubAck.Sequence > p.sequence {
+		if p.sequence > 0 && pubAck.Sequence == p.sequence+1 {
+			p.sequence = pubAck.Sequence
+		} else {
+			p.contiguousStart = pubAck.Sequence
+			p.sequence = pubAck.Sequence
 		}
 	}
+	p.seqMu.Unlock()
 	slog.Debug("published replication message", "stream", pubAck.Stream, "seq", pubAck.Sequence, "subject", p.subject, "duplicate", pubAck.Duplicate)
 	return nil
 }
 
 func (p *NATSPublisher) Sequence() uint64 {
-	return p.sequence.Load()
+	p.seqMu.RLock()
+	defer p.seqMu.RUnlock()
+	return p.sequence
+}
+
+func (p *NATSPublisher) SequenceRange() (uint64, uint64) {
+	p.seqMu.RLock()
+	defer p.seqMu.RUnlock()
+	return p.contiguousStart, p.sequence
 }
 
 func NewAsyncNATSPublisher(nc *nats.Conn, subject string, timeout time.Duration, streamConfig *jetstream.StreamConfig) (*OutboxPublisher, error) {
@@ -760,6 +774,14 @@ func (p *OutboxPublisher) Publish(ctx context.Context, cs *ChangeSet) error {
 
 func (p *OutboxPublisher) Sequence() uint64 {
 	return p.publisher.Sequence()
+}
+
+func (p *OutboxPublisher) SequenceRange() (uint64, uint64) {
+	if rp, ok := p.publisher.(interface{ SequenceRange() (uint64, uint64) }); ok {
+		return rp.SequenceRange()
+	}
+	seq := p.publisher.Sequence()
+	return seq, seq
 }
 
 func (p *OutboxPublisher) Close() error {

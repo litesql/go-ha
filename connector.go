@@ -599,7 +599,28 @@ func (c *Connector) PubSeq() uint64 {
 }
 
 func (c *Connector) LatestSeq() uint64 {
+	if c.subscriber == nil {
+		return 0
+	}
 	return c.subscriber.LatestSeq()
+}
+
+func (c *Connector) ContiguousSeq() uint64 {
+	latest := c.LatestSeq()
+	if c.publisher == nil {
+		return latest
+	}
+	var start, end uint64
+	if rp, ok := c.publisher.(interface{ SequenceRange() (uint64, uint64) }); ok {
+		start, end = rp.SequenceRange()
+	} else {
+		end = c.publisher.Sequence()
+		start = end
+	}
+	if end > latest && start <= latest+1 {
+		return end
+	}
+	return latest
 }
 
 func (c *Connector) LeaderProvider() LeaderProvider {

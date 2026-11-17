@@ -76,7 +76,11 @@ func (cs *ChangeSet) Send(ctx context.Context, pub Publisher) error {
 
 	slog.Debug("Sending changeset", "changes", len(cs.Changes))
 	cs.Timestamp = time.Now().UnixNano()
-	return pub.Publish(ctx, cs)
+	if err := pub.Publish(ctx, cs); err != nil {
+		return err
+	}
+	notifyLocalChangeSet(cs.interceptor, cs)
+	return nil
 }
 
 func (cs *ChangeSet) Prepare(ctx context.Context, db *sql.DB) (conn *haconnect.ConnHooksEnabler, tx *sql.Tx, err error) {
@@ -86,27 +90,31 @@ func (cs *ChangeSet) Prepare(ctx context.Context, db *sql.DB) (conn *haconnect.C
 	if err != nil {
 		return
 	}
+	enableHooks := func(*sql.Conn) error { return nil }
+	if cs.connProvider != nil {
+		enableHooks = cs.connProvider.EnableHooks
+	}
 	conn = &haconnect.ConnHooksEnabler{
 		SqlConn:         sqlConn,
-		ConnHooksEnable: cs.connProvider.EnableHooks,
+		ConnHooksEnable: enableHooks,
 	}
 
-	err = cs.connProvider.DisableHooks(sqlConn)
-	if err != nil {
-		err = errors.Join(err, conn.Close())
-		return
+	if cs.connProvider != nil {
+		err = cs.connProvider.DisableHooks(sqlConn)
+		if err != nil {
+			err = errors.Join(err, conn.Close())
+			conn = nil
+			return
+		}
 	}
+	var skip bool
 	if cs.interceptor != nil {
-		var skip bool
 		skip, err = cs.interceptor.BeforeApply(cs, sqlConn)
 		if err != nil {
 			return
 		}
-		if skip {
-			return
-		}
 	}
-	if len(cs.Changes) == 0 {
+	if (skip || len(cs.Changes) == 0) && cs.TransactionID == "" && cs.Subject == "" {
 		return
 	}
 
@@ -118,42 +126,47 @@ func (cs *ChangeSet) Prepare(ctx context.Context, db *sql.DB) (conn *haconnect.C
 		_, err = tx.ExecContext(ctx, `INSERT INTO `+haconnect.TwoPhaseCommitTransactionTable+`(transaction_id, state) VALUES (?, 'PREPARED')`, cs.TransactionID)
 		if err != nil {
 			err = errors.Join(err, tx.Rollback())
+			tx = nil
 			return
 		}
 	}
-	for _, change := range cs.Changes {
-		if change.Table == controlTableName {
-			continue
-		}
-		sqlQuery, args := cs.strategy.ToSQL(change)
-		if sqlQuery == "" {
-			continue
-		}
-		slog.Debug("applying change", "sql", sqlQuery, "args", args)
-		var res sql.Result
-		res, err = tx.ExecContext(ctx, sqlQuery, args...)
-		if err != nil {
-			slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sqlQuery)
-			err = errors.Join(err, tx.Rollback())
-			return
-		}
-		if change.Operation == "UPDATE" {
-			var affected int64
-			affected, err = res.RowsAffected()
-			if err != nil || affected > 0 {
+	if !skip {
+		for _, change := range cs.Changes {
+			if isInternalTable(change.Table) {
 				continue
 			}
-			change.Operation = "INSERT"
 			sqlQuery, args := cs.strategy.ToSQL(change)
 			if sqlQuery == "" {
 				continue
 			}
 			slog.Debug("applying change", "sql", sqlQuery, "args", args)
-			_, err = tx.ExecContext(ctx, sqlQuery, args...)
+			var res sql.Result
+			res, err = tx.ExecContext(ctx, sqlQuery, args...)
 			if err != nil {
 				slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sqlQuery)
 				err = errors.Join(err, tx.Rollback())
+				tx = nil
 				return
+			}
+			if change.Operation == "UPDATE" {
+				var affected int64
+				affected, err = res.RowsAffected()
+				if err != nil || affected > 0 {
+					continue
+				}
+				change.Operation = "INSERT"
+				sqlQuery, args := cs.strategy.ToSQL(change)
+				if sqlQuery == "" {
+					continue
+				}
+				slog.Debug("applying change", "sql", sqlQuery, "args", args)
+				_, err = tx.ExecContext(ctx, sqlQuery, args...)
+				if err != nil {
+					slog.Error("failed to apply change", "error", err, "stream_seq", cs.StreamSeq, "sql", sqlQuery)
+					err = errors.Join(err, tx.Rollback())
+					tx = nil
+					return
+				}
 			}
 		}
 	}
@@ -206,17 +219,19 @@ func (cs *ChangeSet) UndoLocal(db *sql.DB) error {
 		return err
 	}
 	defer conn.Close()
-	if err := cs.connProvider.DisableHooks(conn); err != nil {
-		return err
+	if cs.connProvider != nil {
+		if err := cs.connProvider.DisableHooks(conn); err != nil {
+			return err
+		}
+		defer cs.connProvider.EnableHooks(conn)
 	}
-	defer cs.connProvider.EnableHooks(conn)
 	return cs.propagate(ctx, conn)
 }
 
 func (cs *ChangeSet) toItem() haconnect.HistoryItem {
 	sqlList := make([]string, 0, len(cs.Changes))
 	for _, change := range cs.Changes {
-		if change.Table == controlTableName {
+		if isInternalTable(change.Table) {
 			continue
 		}
 		sql, args := cs.strategy.ToSQL(change)
@@ -238,7 +253,7 @@ func (cs *ChangeSet) toItem() haconnect.HistoryItem {
 func (cs *ChangeSet) propagate(ctx context.Context, conn *sql.Conn) (err error) {
 	if cs.interceptor != nil {
 		defer func() {
-			err = cs.interceptor.AfterApply(cs, conn, err)
+			err = errors.Join(err, cs.interceptor.AfterApply(cs, conn, err))
 		}()
 		skip, err := cs.interceptor.BeforeApply(cs, conn)
 		if err != nil {
@@ -257,7 +272,7 @@ func (cs *ChangeSet) propagate(ctx context.Context, conn *sql.Conn) (err error) 
 	}
 	defer tx.Rollback()
 	for _, change := range cs.Changes {
-		if change.Table == controlTableName {
+		if isInternalTable(change.Table) {
 			continue
 		}
 		sql, args := cs.strategy.ToSQL(change)

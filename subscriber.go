@@ -583,7 +583,14 @@ func (s *NATSSubscriber) handler(msg jetstream.Msg) {
 		}
 		defer s.connProvider.EnableHooks(conn)
 
-		_, err = conn.ExecContext(ContextLocalDB(context.Background(), true),
+		localCtx := ContextLocalDB(context.Background(), true)
+		if recorder, ok := s.interceptor.(selfChangeSetRecorder); ok {
+			if err := recorder.recordSelfChangeSet(localCtx, &cs, conn); err != nil {
+				slog.Debug("failed to record self changeset in interceptor", "subject", s.subject, "seq", meta.Sequence.Stream, "error", err)
+			}
+		}
+
+		_, err = conn.ExecContext(localCtx,
 			"REPLACE INTO "+controlTableName+"(subject, received_seq, updated_at) VALUES(?, ?, ?)",
 			s.subject, meta.Sequence.Stream, time.Now().Format(time.RFC3339Nano))
 		if err != nil {

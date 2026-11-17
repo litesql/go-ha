@@ -489,6 +489,30 @@ func NameToOptions(name string, baseDriver string) (string, []Option, error) {
 			if enableGlobalOtel {
 				opts = append(opts, WithOpenTelemetry(nil, nil))
 			}
+		case "conflictResolution":
+			typ, col, hasCol := strings.Cut(value, ":")
+			switch strings.ToLower(strings.TrimSpace(typ)) {
+			case "lww":
+				if hasCol {
+					col = strings.TrimSpace(col)
+					if col == "" {
+						return "", nil, fmt.Errorf("invalid conflictResolution %q: column name cannot be empty", value)
+					}
+					opts = append(opts, WithChangeSetInterceptor(NewColumnLWWInterceptor(col)))
+				} else {
+					opts = append(opts, WithChangeSetInterceptor(NewLastWriterWinsInterceptor()))
+				}
+			case "column":
+				col = strings.TrimSpace(col)
+				if !hasCol || col == "" {
+					return "", nil, fmt.Errorf("invalid conflictResolution %q: use conflictResolution=column:<column_name>", value)
+				}
+				opts = append(opts, WithChangeSetInterceptor(NewColumnLWWInterceptor(col)))
+			case "none", "noop":
+				opts = append(opts, WithChangeSetInterceptor(NewNoopInterceptor()))
+			default:
+				return "", nil, fmt.Errorf("invalid conflictResolution %q: use lww, lww:<column>, column:<column>, or noop", value)
+			}
 		default:
 			for _, v := range values[k] {
 				dsnOptions = append(dsnOptions, fmt.Sprintf("%s=%s", k, v))

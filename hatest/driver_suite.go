@@ -3,6 +3,7 @@ package hatest
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -252,6 +253,83 @@ func RunDriverSuite(t *testing.T, newConnector ConnectorFactory, memDSN func(t *
 			t.Fatalf("want recover to run once before blocking the write, got %d", pub.recoveries)
 		}
 	})
+
+	t.Run("ChangeSetInterceptorLastWriterWins", func(t *testing.T) {
+		lww := ha.NewLastWriterWinsInterceptor()
+		pub := new(fakePublisher)
+		connector, err := newConnector(memDSN(t, "interceptor-lww.db"),
+			ha.WithName("node-b"),
+			ha.WithReplicationPublisher(pub),
+			ha.WithChangeSetInterceptor(lww),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer connector.Close()
+		db := sql.OpenDB(connector)
+		defer db.Close()
+
+		if _, err := db.ExecContext(context.Background(), "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)"); err != nil {
+			t.Fatal(err)
+		}
+		// Local write on node-b commits with current wall-clock timestamp (~now)
+		if _, err := db.ExecContext(context.Background(), "INSERT INTO users(id, name) VALUES(1, 'LocalNewer')"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Older remote ChangeSet (ts=100) from node-a must be skipped by LWW!
+		staleCS := ha.NewChangeSet("node-a", connector.ReplicationID())
+		staleCS.Timestamp = 100
+		staleCS.SetInterceptor(lww)
+		staleCS.SetConnProvider(connectorHooksProvider{connector: connector})
+		staleCS.Changes = []ha.Change{{
+			Database:  "main",
+			Table:     "users",
+			Columns:   []string{"id", "name"},
+			PKColumns: []string{"id"},
+			Operation: "UPDATE",
+			OldValues: []any{int64(1), "Old"},
+			NewValues: []any{int64(1), "RemoteStale"},
+			TsNs:      100,
+		}}
+		if err := staleCS.Apply(context.Background(), db); err != nil {
+			t.Fatalf("apply stale ChangeSet: %v", err)
+		}
+
+		var name string
+		if err := db.QueryRowContext(context.Background(), "SELECT name FROM users WHERE id = 1").Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		if name != "LocalNewer" {
+			t.Fatalf("expected newer local write to win, got %q", name)
+		}
+
+		// Newer remote ChangeSet (far future timestamp) must win and update row!
+		futureTs := time.Now().Add(time.Hour).UnixNano()
+		newerCS := ha.NewChangeSet("node-c", connector.ReplicationID())
+		newerCS.Timestamp = futureTs
+		newerCS.SetInterceptor(lww)
+		newerCS.SetConnProvider(connectorHooksProvider{connector: connector})
+		newerCS.Changes = []ha.Change{{
+			Database:  "main",
+			Table:     "users",
+			Columns:   []string{"id", "name"},
+			PKColumns: []string{"id"},
+			Operation: "UPDATE",
+			OldValues: []any{int64(1), "LocalNewer"},
+			NewValues: []any{int64(1), "RemoteNewer"},
+			TsNs:      futureTs,
+		}}
+		if err := newerCS.Apply(context.Background(), db); err != nil {
+			t.Fatalf("apply newer ChangeSet: %v", err)
+		}
+		if err := db.QueryRowContext(context.Background(), "SELECT name FROM users WHERE id = 1").Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		if name != "RemoteNewer" {
+			t.Fatalf("expected newer remote write to win, got %q", name)
+		}
+	})
 }
 
 type recoveringPublisher struct {
@@ -360,3 +438,19 @@ func (f *fakePreparedTwoPhaseCommit) ResolveCommit(ctx context.Context) (bool, e
 }
 
 func (f *fakePreparedTwoPhaseCommit) Close() {}
+
+type connectorHooksProvider struct {
+	connector *ha.Connector
+}
+
+func (p connectorHooksProvider) RegisterHooks(conn driver.Conn, _ *ha.Connector) (driver.Conn, error) {
+	return conn, nil
+}
+
+func (p connectorHooksProvider) DisableHooks(conn *sql.Conn) error {
+	return p.connector.DisableHooks(conn)
+}
+
+func (p connectorHooksProvider) EnableHooks(conn *sql.Conn) error {
+	return p.connector.EnableHooks(conn)
+}

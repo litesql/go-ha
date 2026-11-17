@@ -805,6 +805,7 @@ func (tx *txLocal) Commit() (retErr error) {
 		finishResolve(resolveErr)
 		if committed {
 			tx.c.clearChangeSet()
+			notifyLocalChangeSet(tx.c.connector.interceptor, cs)
 			publishChangeSetCDC(tx.c.connector, cs)
 			if resolveErr != nil {
 				return fmt.Errorf("%w: %w", ErrTwoPhaseCommitPending, resolveErr)
@@ -814,6 +815,7 @@ func (tx *txLocal) Commit() (retErr error) {
 		return errors.Join(err, resolveErr)
 	}
 	tx.c.clearChangeSet()
+	notifyLocalChangeSet(tx.c.connector.interceptor, cs)
 	commitCtx, finishCommit := tx.c.telemetry.startOperation(ctx, "transaction.2pc.commit")
 	setOperationRoute(commitCtx, "two_phase_commit")
 	commitErr := prepared.Commit(commitCtx)

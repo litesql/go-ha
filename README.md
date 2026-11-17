@@ -143,6 +143,38 @@ if err != nil {
 defer rows.Close()
 ```
 
+### Conflict Resolution (`ChangeSetInterceptor`)
+
+In leaderless / multi-master clusters, configure one of the built-in `ChangeSetInterceptor` implementations via `ha.WithChangeSetInterceptor(...)` (or the `conflictResolution` DSN parameter):
+
+```go
+// 1. Schema-less Last-Writer-Wins (tracks per-row timestamps & tombstones in ha_lww_versions)
+lww := ha.NewLastWriterWinsInterceptor()
+
+// 2. Column-based Last-Writer-Wins / Monotonic Version (compares a column on the table itself)
+colLWW := ha.NewColumnLWWInterceptor("updated_at",
+    ha.WithTableVersionColumn("documents", "version"),
+)
+
+// 3. Filtering & Composition (e.g., ignore local-only tables, then resolve conflicts with LWW)
+interceptor := ha.NewCompositeInterceptor(
+    ha.NewIgnoreTablesInterceptor("local_sessions", "cache"),
+    lww,
+)
+
+c, err := sqlite3ha.NewConnector("file:my.db?_journal=WAL",
+    ha.WithName("node-1"),
+    ha.WithChangeSetInterceptor(interceptor),
+)
+```
+
+Built-in interceptors include:
+- `NewLastWriterWinsInterceptor(opts...)`: Schema-less LWW using `Change.TsNs` / `ChangeSet.Timestamp` with deterministic node-name tie-breaking, local commit tracking, and delete tombstones.
+- `NewColumnLWWInterceptor(column, opts...)`: Column-based LWW / version comparison supporting integers, floats, `time.Time`, RFC3339 / SQLite timestamps, and lexicographical HLC strings.
+- `NewFilterInterceptor(fn)`, `NewAllowTablesInterceptor(tables...)`, `NewIgnoreTablesInterceptor(tables...)`, `NewAllowOperationsInterceptor(ops...)`, `NewIgnoreOperationsInterceptor(ops...)`: Declarative filtering by table, operation, or custom predicate.
+- `NewCompositeInterceptor(interceptors...)`: Chains multiple interceptors (`BeforeApply` in order, `AfterApply` in reverse order).
+- `ChangeSetInterceptorFuncs` and `NewNoopInterceptor()`: Lightweight function adapter and embeddable no-op base.
+
 ## Drivers
 
 go-ha provides several driver implementations:
@@ -158,6 +190,7 @@ go-ha provides several driver implementations:
 |------------------------|-----------------------------------------------------------------------------|-----------------|
 | asyncPublisher         | Enables asynchronous publishing of replication events using outbox pattern. | false           |
 | autoStart              | Automatically starts publisher, subscriber and snapshotter on initialization.| true            |
+| conflictResolution     | Built-in conflict resolution interceptor: `lww`, `lww:<column>`, `column:<column>`, or `noop`. | |
 | forcePublishBeforeStart | Force publish data to stream before complete the start proccess            | false |
 | replicationID          | Unique ID for this replication instance.                                    | [database filename] |
 | deliverPolicy          | Delivery policy for replication events (`all`, `last`, etc.).              | all             |

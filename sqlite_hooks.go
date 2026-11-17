@@ -147,13 +147,14 @@ func getTableSchema(c *Conn, replicationID string, database string, table string
 
 func (c *Conn) enableCDCHooks() {
 	cs := NewChangeSet(c.connector.NodeName(), c.connector.ReplicationID())
+	cs.SetInterceptor(c.connector.interceptor)
 	c.changeSet = cs
 	if c.hooksAdapter == nil {
 		return
 	}
 	c.hooksAdapter.EnableHooks(c.SQLiteConn, HookCallbacks{
 		OnPreUpdate: func(change Change) {
-			if change.Table == TwoPhaseCommitDecisionTable || change.Table == OutboxTable {
+			if isInternalTable(change.Table) {
 				return
 			}
 			schema, err := getTableSchema(c, c.connector.ReplicationID(), change.Database, change.Table)

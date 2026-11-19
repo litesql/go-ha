@@ -154,7 +154,7 @@ func NewConnector(dsn string, drv driver.Driver, connHooksFactory ConnHooksFacto
 			ok  bool
 		)
 		if ncs, ok = natsClientServers[c.embeddedNatsConfig]; !ok {
-			ncs, err = runEmbeddedNATSServer(*c.embeddedNatsConfig)
+			ncs, err = runEmbeddedNATSServer(*c.embeddedNatsConfig, c.natsOptions...)
 			if err != nil {
 				return nil, fmt.Errorf("failed to start embedded NATS server: %w", err)
 			}

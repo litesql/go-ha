@@ -19,7 +19,7 @@ type natsClientServer struct {
 	count  int
 }
 
-func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
+func runEmbeddedNATSServer(cfg EmbeddedNatsConfig, natsOpts ...nats.Option) (*natsClientServer, error) {
 	var (
 		opts *server.Options
 		err  error
@@ -109,7 +109,15 @@ func runEmbeddedNATSServer(cfg EmbeddedNatsConfig) (*natsClientServer, error) {
 	}
 
 	slog.Debug("embedded NATS server is ready", "cluster", ns.ClusterName(), "jetstream", ns.JetStreamEnabled())
-	nc, err := nats.Connect("", nats.InProcessServer(ns))
+
+	connectOpts := make([]nats.Option, 0, len(natsOpts)+2)
+	connectOpts = append(connectOpts, nats.InProcessServer(ns))
+	if authOpt := inProcesAuthOption(ns, opts, cfg); authOpt != nil {
+		connectOpts = append(connectOpts, authOpt)
+	}
+	connectOpts = append(connectOpts, natsOpts...)
+
+	nc, err := nats.Connect("", connectOpts...)
 	if err != nil {
 		ns.Shutdown()
 		return nil, err
@@ -136,6 +144,47 @@ func waitForLeader(ns *server.Server, size int) {
 		slog.Debug("waiting for the cluster leader", "peers", len(ns.JetStreamClusterPeers()), "size", size)
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+func isBcryptHash(s string) bool {
+	return len(s) == 60 && strings.HasPrefix(s, "$2a$") || strings.HasPrefix(s, "$2b$") || strings.HasPrefix(s, "$2y$")
+}
+
+func inProcesAuthOption(ns *server.Server, opts *server.Options, cfg EmbeddedNatsConfig) nats.Option {
+	if cfg.User != "" && cfg.Pass != "" {
+		return nats.UserInfo(cfg.User, cfg.Pass)
+	}
+	if opts == nil {
+		return nil
+	}
+	if opts.Username != "" && !isBcryptHash(opts.Password) {
+		return nats.UserInfo(opts.Username, opts.Password)
+	}
+	if opts.Authorization != "" && !isBcryptHash(opts.Authorization) {
+		return nats.Token(opts.Authorization)
+	}
+	sysAccName := "$SYS"
+	if sysAcc := ns.SystemAccount(); sysAcc != nil && sysAcc.GetName() != "" {
+		sysAccName = sysAcc.GetName()
+	} else if opts.SystemAccount != "" {
+		sysAccName = opts.SystemAccount
+	}
+	for _, u := range opts.Users {
+		if u == nil || u.Username == "" || isBcryptHash(u.Password) {
+			continue
+		}
+		if u.Account != nil {
+			accName := u.Account.GetName()
+			if accName == sysAccName {
+				continue
+			}
+			if acc, err := ns.LookupAccount(accName); err == nil && acc != nil && !acc.JetStreamEnabled() {
+				continue
+			}
+		}
+		return nats.UserInfo(u.Username, u.Password)
+	}
+	return nil
 }
 
 var natsIdentifierNormalizer = regexp.MustCompile(`[.\/\s*>*]`)

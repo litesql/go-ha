@@ -58,7 +58,7 @@ func WithEmbeddedNatsConfig(cfg *EmbeddedNatsConfig) Option {
 func WithNatsOptions(options ...nats.Option) Option {
 	return func(c *Connector) {
 		if len(options) > 0 {
-			c.natsOptions = options
+			c.natsOptions = append(c.natsOptions, options...)
 		}
 	}
 }

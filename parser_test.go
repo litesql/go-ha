@@ -317,7 +317,7 @@ func TestStatementModifiesDatabase(t *testing.T) {
 		},
 		"vacuum": {
 			sql:              "VACUUM",
-			modifiesDatabase: false,
+			modifiesDatabase: true,
 		},
 		"explain": {
 			sql:              "EXPLAIN QUERY PLAN SELECT * FROM user",
@@ -341,11 +341,11 @@ func TestStatementModifiesDatabase(t *testing.T) {
 		},
 		"attach": {
 			sql:              "ATTACH DATABASE 'test.db' AS testdb",
-			modifiesDatabase: false,
+			modifiesDatabase: true,
 		},
 		"detach": {
 			sql:              "DETACH DATABASE testdb",
-			modifiesDatabase: false,
+			modifiesDatabase: true,
 		},
 		"create index": {
 			sql:              "CREATE INDEX idx_name ON user(name)",

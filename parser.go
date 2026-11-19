@@ -271,6 +271,15 @@ func (s *Statement) VisitEnd(n sql.Node) (sql.Node, error) {
 	case *sql.ReleaseStatement:
 		s.modifiesDatabase = true
 		s.typ = TypeRelease
+	case *sql.VacuumStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeVacuum
+	case *sql.AttachStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeOther
+	case *sql.DetachStatement:
+		s.modifiesDatabase = true
+		s.typ = TypeOther
 	default:
 		s.typ = TypeOther
 	}

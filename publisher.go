@@ -721,6 +721,8 @@ type OutboxPublisher struct {
 // OutboxTable stores local changeset for async publishing.
 const OutboxTable = "ha_outbox"
 
+const outboxRelayBatchSize = 100
+
 type preparedOutboxCommit struct {
 	cs        *ChangeSet
 	publisher *OutboxPublisher
@@ -800,17 +802,16 @@ func (p *OutboxPublisher) start() {
 			if p.localDB != nil {
 				p.relay()
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 }
 
 func (p *OutboxPublisher) relay() {
-	var (
-		id        int
-		changeset []byte
+	rows, err := p.localDB.Query(
+		fmt.Sprintf("SELECT rowid, changeset FROM `%s` WHERE subject = ? ORDER BY timestamp, rowid LIMIT %d", OutboxTable, outboxRelayBatchSize),
+		p.subject,
 	)
-	err := p.localDB.QueryRow("SELECT rowid, changeset FROM "+OutboxTable+" WHERE subject = ? ORDER BY timestamp, rowid LIMIT 1", p.subject).Scan(&id, &changeset)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			slog.Error("outbox publisher relay query", "error", err)
@@ -818,22 +819,62 @@ func (p *OutboxPublisher) relay() {
 		return
 	}
 
-	var cs ChangeSet
-	err = json.Unmarshal(changeset, &cs)
-	if err != nil {
-		slog.Error("outbox publisher relay unmarshal", "error", err)
+	type outboxRecord struct {
+		id        int64
+		changeset []byte
+	}
+	records := make([]outboxRecord, 0, outboxRelayBatchSize)
+	for rows.Next() {
+		var record outboxRecord
+		if err := rows.Scan(&record.id, &record.changeset); err != nil {
+			slog.Error("outbox publisher relay scan", "error", err)
+			_ = rows.Close()
+			return
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("outbox publisher relay query", "error", err)
+		_ = rows.Close()
 		return
 	}
-	err = p.publisher.Publish(context.Background(), &cs)
-	if err != nil {
-		slog.Error("outbox publisher relay publish", "error", err)
-		time.Sleep(5 * time.Second)
+	if err := rows.Close(); err != nil {
+		slog.Error("outbox publisher relay close query", "error", err)
+		return
+	}
+	if len(records) == 0 {
 		return
 	}
 
-	_, err = p.localDB.Exec("DELETE FROM "+OutboxTable+" WHERE rowid = ?", id)
+	publishedIDs := make([]int64, 0, len(records))
+	retryDelay := false
+	for _, record := range records {
+		var cs ChangeSet
+		if err := json.Unmarshal(record.changeset, &cs); err != nil {
+			slog.Error("outbox publisher relay unmarshal", "error", err)
+			break
+		}
+		if err := p.publisher.Publish(context.Background(), &cs); err != nil {
+			slog.Error("outbox publisher relay publish", "error", err)
+			retryDelay = true
+			break
+		}
+		publishedIDs = append(publishedIDs, record.id)
+	}
+
+	if len(publishedIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(publishedIDs)), ",")
+		args := make([]any, len(publishedIDs))
+		for i, id := range publishedIDs {
+			args[i] = id
+		}
+		_, err = p.localDB.Exec("DELETE FROM "+OutboxTable+" WHERE rowid IN ("+placeholders+")", args...)
+	}
 	if err != nil {
 		slog.Error("async publisher relay remove from outbox", "error", err)
+	}
+	if retryDelay {
+		time.Sleep(5 * time.Second)
 	}
 }
 

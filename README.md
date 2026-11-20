@@ -208,6 +208,8 @@ go-ha provides several driver implementations:
 | natsMaxPayload         | Maximum allowed payload size for embedded NATS messages (bytes).           |                 |
 | natsName               | Name for embedded NATS server.                                              |                 |
 | natsPort               | Port for embedded NATS server.                                              | 4222            |
+| natsUser               | Username for embedded NATS server.                                              |             |
+| natsPass               | Password for embedded NATS server.                                              |             |
 | natsStoreDir           | Data directory for embedded NATS server.                                    |                 |
 | natsWebSocketPort      | WebSocket Port for embedded NATS server. |                |
 | natsWebSocketNoTLS     | Disable WebSocket TLS for embedded NATS | false  |
